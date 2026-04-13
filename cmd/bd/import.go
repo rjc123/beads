@@ -28,17 +28,20 @@ brings new issues, 'bd import' loads them into the local Dolt database.
 EXAMPLES:
   bd import                        # Import from .beads/issues.jsonl
   bd import backup.jsonl           # Import from a specific file
-  bd import --dry-run              # Show what would be imported`,
+  bd import --dry-run              # Show what would be imported
+  bd import --merge                # Import, but skip issues where local is newer`,
 	GroupID: "sync",
 	RunE:    runImport,
 }
 
 var (
 	importDryRun bool
+	importMerge  bool
 )
 
 func init() {
 	importCmd.Flags().BoolVar(&importDryRun, "dry-run", false, "Show what would be imported without importing")
+	importCmd.Flags().BoolVar(&importMerge, "merge", false, "Use last-writer-wins: skip updates where the local record is newer (by updated_at)")
 	rootCmd.AddCommand(importCmd)
 }
 
@@ -78,7 +81,7 @@ func runImport(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("no database — run 'bd init' or 'bd bootstrap' first")
 	}
 
-	result, err := importFromLocalJSONLFull(ctx, store, jsonlPath)
+	result, err := importFromLocalJSONLFull(ctx, store, jsonlPath, importMerge)
 	if err != nil {
 		return fmt.Errorf("import failed: %w", err)
 	}
