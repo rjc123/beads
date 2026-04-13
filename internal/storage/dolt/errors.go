@@ -97,7 +97,7 @@ func wrapExecError(op string, err error) error {
 }
 
 // databaseNotFoundError builds the "database not found" error with a config-aware
-// hint about sync.git-remote and backup recovery. Extracted from openServerConnection
+// hint about sync.remote and backup recovery. Extracted from openServerConnection
 // for testability.
 func databaseNotFoundError(cfg *Config) error {
 	var b strings.Builder
@@ -123,11 +123,11 @@ func databaseNotFoundError(cfg *Config) error {
 	b.WriteString("  bd doctor                  # Check server and database health\n")
 	b.WriteString("  bd dolt status             # Show which data directory the server is using")
 
-	if cfg.SyncGitRemote != "" {
-		fmt.Fprintf(&b, "\n\nTip: sync.git-remote is configured (%s).\nRun bd bootstrap to recover from the remote or confirm what bootstrap will do with --dry-run.", cfg.SyncGitRemote)
+	if cfg.SyncRemote != "" {
+		fmt.Fprintf(&b, "\n\nTip: sync.remote is configured (%s).\nRun bd bootstrap to recover from the remote or confirm what bootstrap will do with --dry-run.", cfg.SyncRemote)
 	} else {
 		b.WriteString("\n\nTip: If this is an existing project, fresh clone, or shared-server recovery, run bd bootstrap first.\n")
-		b.WriteString("If bootstrap cannot find the expected remote automatically, set sync.git-remote\nin .beads/config.yaml and re-run bd bootstrap.\n")
+		b.WriteString("If bootstrap cannot find the expected remote automatically, set sync.remote\nin .beads/config.yaml and re-run bd bootstrap.\n")
 		b.WriteString("Use bd bootstrap --dry-run if you need to confirm the plan before it initializes anything.\n")
 		b.WriteString("Use bd init only when creating a brand-new project with no existing .beads data.")
 	}

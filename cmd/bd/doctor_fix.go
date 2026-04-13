@@ -9,6 +9,7 @@ import (
 
 	"github.com/steveyegge/beads/cmd/bd/doctor"
 	"github.com/steveyegge/beads/cmd/bd/doctor/fix"
+	"github.com/steveyegge/beads/internal/storage/dolt"
 	"github.com/steveyegge/beads/internal/ui"
 	"golang.org/x/term"
 )
@@ -208,6 +209,7 @@ func applyFixList(path string, fixes []doctorCheck) {
 		"Project Gitignore",
 		"Metadata Config",
 		"Lock Files",
+		"Circuit Breaker",
 		"Permissions",
 		"Database Config",
 		"Config Values",
@@ -329,6 +331,9 @@ func applyFixList(path string, fixes []doctorCheck) {
 			err = fix.PatrolPollution(path)
 		case "Lock Files":
 			err = fix.StaleLockFiles(path)
+		case "Circuit Breaker":
+			dolt.CleanStaleCircuitBreakerFiles()
+			fmt.Printf("  %s Cleared stale circuit breaker files\n", ui.RenderPass("✓"))
 		case "Fresh Clone":
 			err = fix.FreshCloneImport(path, Version)
 		case "Pending Migrations":
@@ -337,6 +342,19 @@ func applyFixList(path string, fixes []doctorCheck) {
 			err = fix.ConfigValues(path)
 		case "Classic Artifacts":
 			err = fix.ClassicArtifacts(path)
+		case "Btrfs NoCOW (dolt)":
+			// Applies FS_NOCOW_FL to .beads/ and any existing dolt data
+			// subdirs. Prints the returned message (which includes the
+			// "relocate existing files" warning) so the user sees why the
+			// fix is incomplete on its own.
+			var msg string
+			msg, err = doctor.FixBtrfsNoCOW(path)
+			if err == nil && msg != "" {
+				fmt.Print(msg)
+				if !strings.HasSuffix(msg, "\n") {
+					fmt.Println()
+				}
+			}
 		case "Project Identity":
 			err = fix.FixProjectIdentity(path)
 		case "Remote Consistency":

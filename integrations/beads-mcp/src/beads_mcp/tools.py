@@ -561,16 +561,21 @@ async def beads_add_dependency(
     depends_on_id: Annotated[str, "Issue that issue_id depends on (e.g., bd-1)"],
     dep_type: Annotated[
         DependencyType,
-        "Dependency type: blocks, related, parent-child, or discovered-from",
+        "Dependency type. Common: blocks, related, parent-child, discovered-from. "
+        "Full set validated by bd CLI (see internal/types/types.go).",
     ] = DEFAULT_DEPENDENCY_TYPE,
 ) -> str:
     """Add a dependency relationship between two issues.
 
-    Types:
+    Common types:
     - blocks: depends_on_id must complete before issue_id can start
     - related: Soft connection, doesn't block progress
     - parent-child: Epic/subtask hierarchical relationship
     - discovered-from: Track that issue_id was discovered while working on depends_on_id
+
+    Other supported types include relates-to, replies-to, duplicates, supersedes,
+    caused-by, validates, and more. The bd CLI is the source of truth for the
+    full list — see internal/types/types.go.
 
     Use 'discovered-from' when you find new work during your session.
     """

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -79,6 +80,7 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 		database, _ := cmd.Flags().GetString("database")
 		destroyToken, _ := cmd.Flags().GetString("destroy-token")
 		sharedServer, _ := cmd.Flags().GetBool("shared-server")
+		externalServer, _ := cmd.Flags().GetBool("external")
 
 		// Handle --backend flag: "dolt" is the only supported backend.
 		// "sqlite" is accepted for backward compatibility but prints a
@@ -242,11 +244,14 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 			prefix = filepath.Base(cwd)
 		}
 
-		// Normalize prefix: strip leading dots and trailing hyphens.
-		// Leading dots produce invalid Dolt database names (e.g. ".claude" -> "bd_.claude").
-		// The trailing hyphen is added automatically during ID generation.
+		// Normalize prefix before storing it in config or deriving the Dolt
+		// database name. Dots are not valid in issue prefixes and must match the
+		// underscore form used for DoltDatabase/metadata.json.
+		// Leading dots produce invalid names (e.g. ".claude" -> "claude"), and
+		// the trailing hyphen is added automatically during ID generation.
 		prefix = strings.TrimLeft(prefix, ".")
 		prefix = strings.TrimRight(prefix, "-")
+		prefix = strings.ReplaceAll(prefix, ".", "_")
 
 		// Sanitize prefix for use as a MySQL database name.
 		// Directory names like "001" (common in temp dirs) are invalid because
@@ -329,7 +334,32 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 		if useLocalBeads {
 			// Create .beads directory with owner-only permissions (0700).
 			if err := os.MkdirAll(beadsDir, config.BeadsDirPerm); err != nil {
+				if os.IsPermission(err) {
+					if runtime.GOOS == "windows" {
+						FatalError("failed to create .beads directory: %v\n\n"+
+							"Windows Controlled Folder Access may be blocking bd.exe.\n"+
+							"To fix: Open Windows Security > Virus & threat protection >\n"+
+							"Ransomware protection > Allow an app through Controlled folder access\n"+
+							"and add bd.exe (typically %%USERPROFILE%%\\go\\bin\\bd.exe).", err)
+					} else {
+						FatalError("failed to create .beads directory: %v\n\n"+
+							"Permission denied. Check directory ownership and permissions:\n"+
+							"  ls -la %s\n"+
+							"  chmod 755 %s", err, filepath.Dir(beadsDir), filepath.Dir(beadsDir))
+					}
+				}
 				FatalError("failed to create .beads directory: %v", err)
+			}
+
+			// On Linux btrfs, disable transparent compression on .beads/ so that
+			// dolt's hot append-only write path (under .beads/dolt/ or
+			// .beads/embeddeddolt/) does not trigger kworker thrashing from
+			// read-modify-write-recompress cycles. New files created inside this
+			// directory inherit FS_NOCOW_FL automatically, so setting it here —
+			// before dolt writes anything — covers both server and embedded modes.
+			// No-op on non-Linux and non-btrfs filesystems (GH nocow-beads-dolt-init).
+			if err := applyNoCOW(beadsDir); err != nil && !quiet {
+				fmt.Fprintf(os.Stderr, "Warning: failed to set FS_NOCOW_FL on %s: %v\n", beadsDir, err)
 			}
 
 			// Create/update .gitignore in .beads directory (only if missing or outdated)
@@ -395,6 +425,12 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 			if err := os.MkdirAll(initDBPath, config.BeadsDirPerm); err != nil {
 				FatalError("failed to create storage directory %s: %v", initDBPath, err)
 			}
+			// Linux btrfs: disable compression on the dolt data dir to avoid
+			// kworker thrashing on the append-only write path. Best-effort; a
+			// non-btrfs filesystem returns nil from applyNoCOW.
+			if err := applyNoCOW(initDBPath); err != nil && !quiet {
+				fmt.Fprintf(os.Stderr, "Warning: failed to set FS_NOCOW_FL on %s: %v\n", initDBPath, err)
+			}
 		}
 
 		ctx := rootCtx
@@ -423,34 +459,53 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 		if database != "" {
 			dbName = database
 		}
-		// Auto-bootstrap from git remote if sync.git-remote is configured.
-		// This enables the new-machine story: set sync.git-remote in config.yaml,
-		// run bd init, and the Dolt database is cloned from the git remote
-		// automatically — no manual dolt clone needed.
-		gitRemoteURL := config.GetString("sync.git-remote")
-		bootstrappedFromRemote := false
-		if gitRemoteURL != "" {
-			cloned, bootstrapErr := dolt.BootstrapFromGitRemoteWithDB(ctx, storagePath, gitRemoteURL, dbName)
-			if bootstrapErr != nil {
-				fmt.Fprintf(os.Stderr, "Warning: failed to bootstrap from git remote %s: %v\n", gitRemoteURL, bootstrapErr)
-				fmt.Fprintf(os.Stderr, "  Continuing with fresh database initialization.\n")
-				// Non-fatal: fall through to normal init
-			} else if cloned {
-				bootstrappedFromRemote = true
-				if !quiet {
-					fmt.Printf("  %s Bootstrapped from git remote: %s\n", ui.RenderPass("✓"), gitRemoteURL)
+
+		// Validate the auto-derived database name early so we can surface a clear,
+		// actionable error instead of a cryptic failure from the storage layer.
+		// The --database flag is already validated above; this catches cases where
+		// the directory name produces an invalid identifier after sanitization
+		// (e.g. spaces, '@', '!' that survive the hyphen/dot replacement).
+		// Skip when dbName came from an existing config — it was valid when stored.
+		if database == "" {
+			if existingCfg, _ := configfile.Load(beadsDir); existingCfg == nil || existingCfg.DoltDatabase == "" {
+				if err := dolt.ValidateDatabaseName(dbName); err != nil {
+					dirName := filepath.Base(cwd)
+					fmt.Fprintf(os.Stderr, "Error: directory name %q produces an invalid database name %q.\n", dirName, dbName)
+					fmt.Fprintf(os.Stderr, "Re-run with a valid prefix: bd init --prefix <name>\n")
+					fmt.Fprintf(os.Stderr, "(Database names must start with a letter or underscore and contain only letters, digits, underscores, or hyphens.)\n")
+					os.Exit(1)
 				}
 			}
+		}
+
+		// Auto-bootstrap from git remote if sync.git-remote is configured
+		// or origin has refs/dolt/data. This makes bd init and bd bootstrap
+		// Auto-bootstrap from remote if sync.remote (or deprecated
+		// sync.git-remote) is configured, or git origin has Dolt data
+		// (refs/dolt/data). This makes bd init and bd bootstrap
+		// interchangeable — both clone from the remote when one exists.
+		syncURL := resolveSyncRemote()
+		bootstrappedFromRemote := false
+		syncFromRemote := false
+		if syncURL != "" {
+			syncURL = normalizeRemoteURL(syncURL)
+			syncFromRemote = true
 		} else if isGitRepo() && !isBareGitRepo() {
-			// Auto-detect git origin and use it as the Dolt remote.
-			// This enables push/pull against the git remote by default.
 			if originURL, err := gitRemoteGetURL("origin"); err == nil && originURL != "" {
-				gitRemoteURL = gitURLToDoltRemote(originURL)
+				syncURL = normalizeRemoteURL(originURL)
 				if !force && gitLsRemoteHasRef("origin", "refs/dolt/data") {
-					fmt.Fprintf(os.Stderr, "Note: origin has an existing beads database (refs/dolt/data).\n")
-					fmt.Fprintf(os.Stderr, "  Run 'bd bootstrap' instead to clone it.\n")
-					fmt.Fprintf(os.Stderr, "  Continuing with fresh database initialization.\n\n")
+					syncFromRemote = true
 				}
+			}
+		}
+		if syncFromRemote {
+			if err := cloneFromRemote(ctx, beadsDir, syncURL, dbName); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			bootstrappedFromRemote = true
+			if !quiet {
+				fmt.Printf("  %s Bootstrapped from remote: %s\n", ui.RenderPass("✓"), syncURL)
 			}
 		}
 
@@ -510,7 +565,11 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 		// opening the store. EnsureRunning won't auto-start because
 		// ResolveServerMode returns ServerModeExternal, so start it
 		// explicitly via the shared server directory (GH#2946).
-		if sharedServer || doltserver.IsSharedServerMode() {
+		//
+		// --external skips this: the server is managed outside bd (e.g.
+		// Docker, systemd, testcontainers). The caller is responsible for
+		// ensuring the server is reachable and the port file exists.
+		if !externalServer && (sharedServer || doltserver.IsSharedServerMode()) {
 			if sharedDir, err := doltserver.SharedServerDir(); err == nil {
 				if state, _ := doltserver.IsRunning(sharedDir); state == nil || !state.Running {
 					if _, startErr := doltserver.Start(sharedDir); startErr != nil {
@@ -530,18 +589,18 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 			os.Exit(1)
 		}
 
-		// Configure the git remote in the Dolt store so bd dolt push/pull
+		// Configure the remote in the Dolt store so bd dolt push/pull
 		// work immediately after bootstrap. Also add the remote when
-		// sync.git-remote is configured but bootstrap was skipped (DB already
+		// sync.remote is configured but bootstrap was skipped (DB already
 		// existed) — ensures the remote is always wired up.
-		if gitRemoteURL != "" {
+		if syncURL != "" {
 			hasRemote, _ := store.HasRemote(ctx, "origin")
 			if !hasRemote {
-				if err := store.AddRemote(ctx, "origin", gitRemoteURL); err != nil {
-					fmt.Fprintf(os.Stderr, "Warning: failed to add git remote 'origin': %v\n", err)
+				if err := store.AddRemote(ctx, "origin", syncURL); err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: failed to add remote 'origin': %v\n", err)
 					// Non-fatal — user can add manually with: bd dolt remote add origin <url>
 				} else if !quiet {
-					fmt.Printf("  %s Configured Dolt remote: origin → %s\n", ui.RenderPass("✓"), gitRemoteURL)
+					fmt.Printf("  %s Configured Dolt remote: origin → %s\n", ui.RenderPass("✓"), syncURL)
 				}
 			}
 		}
@@ -555,7 +614,10 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 		// avoid clobbering when multiple rigs share the same Dolt database)
 		existing, _ := store.GetConfig(ctx, "issue_prefix")
 		if existing == "" {
-			if err := store.SetConfig(ctx, "issue_prefix", prefix); err != nil {
+			// Sanitize dots to underscores so issue IDs (e.g. "GPUPolynomials_jl-1")
+			// remain valid identifiers. Must match DoltDatabase sanitization above.
+			issuePrefix := strings.ReplaceAll(prefix, ".", "_")
+			if err := store.SetConfig(ctx, "issue_prefix", issuePrefix); err != nil {
 				_ = store.Close()
 				FatalError("failed to set issue prefix: %v", err)
 			}
@@ -647,8 +709,12 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 				if database != "" {
 					cfg.DoltDatabase = database
 				} else if cfg.DoltDatabase == "" && prefix != "" {
-					// Sanitize hyphens to underscores for SQL-idiomatic names (GH#2142).
+					// Sanitize hyphens and dots to underscores for SQL-idiomatic names (GH#2142).
+					// Must match the sanitization applied to dbName above (lines 430-431),
+					// otherwise init creates a database with one name but metadata.json
+					// records a different name, causing reopens to fail.
 					cfg.DoltDatabase = strings.ReplaceAll(prefix, "-", "_")
+					cfg.DoltDatabase = strings.ReplaceAll(cfg.DoltDatabase, ".", "_")
 				}
 
 				// Persist the connection mode matching this build.
@@ -684,6 +750,17 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 			if err := createConfigYaml(beadsDir, false, ""); err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: failed to create config.yaml: %v\n", err)
 				// Non-fatal - continue anyway
+			}
+
+			// Persist sync.remote to config.yaml so fresh clones can
+			// bootstrap from it (the Dolt database is gitignored).
+			// Must run AFTER createConfigYaml which creates the file.
+			if syncURL != "" {
+				if existing := config.GetYamlConfig("sync.remote"); existing == "" {
+					if err := config.SetYamlConfig("sync.remote", syncURL); err != nil {
+						FatalError("failed to persist sync.remote to config.yaml: %v", err)
+					}
+				}
 			}
 
 			// Enable shared server mode if requested via flag OR env var (GH#2377).
@@ -1134,6 +1211,7 @@ func init() {
 	initCmd.Flags().String("server-user", "", "Dolt server MySQL user (default: root)")
 	initCmd.Flags().String("database", "", "Use existing server database name (overrides prefix-based naming)")
 	initCmd.Flags().Bool("shared-server", false, "Enable shared Dolt server mode (all projects share one server at ~/.beads/shared-server/)")
+	initCmd.Flags().Bool("external", false, "Server is externally managed (skip server startup); use with --shared-server or --server")
 
 	rootCmd.AddCommand(initCmd)
 }
@@ -1262,7 +1340,7 @@ Aborting.`, ui.RenderWarn("⚠"), location, ui.RenderAccent("bd list"), prefix)
 				password := cfg.GetDoltServerPassword()
 				user := cfg.GetDoltServerUser()
 
-				result := checkDatabaseOnServer(host, port, user, password, dbName)
+				result := checkDatabaseOnServer(host, port, user, password, dbName, cfg.GetDoltServerTLS())
 				if result.Reachable && !result.Exists && result.Err == nil {
 					// Server is up but DB doesn't exist. Since we also know
 					// doltDirExists==false, this is a fresh clone — there's no
@@ -1358,11 +1436,14 @@ Aborting.`, ui.RenderWarn("⚠"), dbPath, ui.RenderAccent("bd list"), prefix)
 // issues. Returns 0 if the database is unreachable or empty. Used by --force
 // safeguard to show users what they're about to destroy.
 func countExistingIssues(_ string) (int, error) {
-	beadsDir := ".beads"
+	var beadsDir string
 	if envBeadsDir := os.Getenv("BEADS_DIR"); envBeadsDir != "" {
 		beadsDir = utils.CanonicalizePath(envBeadsDir)
 	} else {
-		beadsDir = beads.FollowRedirect(beadsDir)
+		beadsDir = beads.FindBeadsDir()
+		if beadsDir == "" {
+			return 0, nil
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

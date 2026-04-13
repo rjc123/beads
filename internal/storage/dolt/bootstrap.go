@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/steveyegge/beads/internal/configfile"
@@ -16,37 +17,45 @@ import (
 // Bootstrap operations should complete well within this window.
 const staleLockAge = 5 * time.Minute
 
-// BootstrapFromGitRemote clones a Dolt database from a git remote URL.
+// BootstrapFromRemote clones a Dolt database from a remote URL.
 // This is used when no local .beads/dolt/ exists but config.yaml has
-// sync.git-remote configured, enabling cold-start from a git remote
-// that already contains Dolt data on refs/dolt/data.
+// sync.remote configured, enabling cold-start from any Dolt-compatible
+// remote (git, DoltHub, S3, GCS, file, etc.).
 //
 // dolt clone creates <target>/.dolt/ directly (no database subdirectory),
 // but the embedded driver expects <doltDir>/<database>/.dolt/. To reconcile,
 // we clone into <doltDir>/<database>/ so the embedded driver finds it.
-// If database is empty, "beads" is used.
+// Uses the default database name ("beads"). Prefer BootstrapFromRemoteWithDB
+// when a configured database name is available.
 //
 // Returns true if the clone was performed, false if skipped (dolt dir already exists).
-func BootstrapFromGitRemote(ctx context.Context, doltDir, gitRemoteURL string) (bool, error) {
-	return BootstrapFromGitRemoteWithDB(ctx, doltDir, gitRemoteURL, "")
+func BootstrapFromRemote(ctx context.Context, doltDir, remoteURL string) (bool, error) {
+	return BootstrapFromRemoteWithDB(ctx, doltDir, remoteURL, configfile.DefaultDoltDatabase)
 }
 
-// BootstrapFromGitRemoteWithDB is like BootstrapFromGitRemote but allows
+// BootstrapFromGitRemote is deprecated. Use BootstrapFromRemote instead.
+func BootstrapFromGitRemote(ctx context.Context, doltDir, gitRemoteURL string) (bool, error) {
+	return BootstrapFromRemote(ctx, doltDir, gitRemoteURL)
+}
+
+// BootstrapFromRemoteWithDB is like BootstrapFromRemote but allows
 // specifying the database name (used by the embedded driver for the
-// subdirectory structure).
-func BootstrapFromGitRemoteWithDB(ctx context.Context, doltDir, gitRemoteURL, database string) (bool, error) {
+// subdirectory structure). The database parameter must not be empty;
+// callers should use cfg.GetDoltDatabase() which applies the fallback chain
+// (env var → config → default).
+func BootstrapFromRemoteWithDB(ctx context.Context, doltDir, remoteURL, database string) (bool, error) {
 	// Skip if Dolt database already exists
 	if doltExists(doltDir) {
 		return false, nil
 	}
 
-	if database == "" {
-		database = configfile.DefaultDoltDatabase
+	if strings.TrimSpace(database) == "" {
+		return false, fmt.Errorf("database name must not be empty; use cfg.GetDoltDatabase() to resolve the configured name")
 	}
 
 	// Verify dolt CLI is available
 	if _, err := exec.LookPath("dolt"); err != nil {
-		return false, fmt.Errorf("dolt CLI not found (required for git remote bootstrap): %w", err)
+		return false, fmt.Errorf("dolt CLI not found (required for remote bootstrap): %w", err)
 	}
 
 	// Create the parent dolt directory
@@ -57,13 +66,18 @@ func BootstrapFromGitRemoteWithDB(ctx context.Context, doltDir, gitRemoteURL, da
 	// Clone into <doltDir>/<database>/ so the embedded driver can find it.
 	// `dolt clone <url> <target>` creates <target>/.dolt/ directly.
 	cloneTarget := filepath.Join(doltDir, database)
-	cmd := exec.CommandContext(ctx, "dolt", "clone", gitRemoteURL, cloneTarget)
+	cmd := exec.CommandContext(ctx, "dolt", "clone", remoteURL, cloneTarget)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return false, fmt.Errorf("dolt clone failed: %w\nOutput: %s", err, output)
 	}
 
-	fmt.Fprintf(os.Stderr, "Bootstrapped from git remote: %s\n", gitRemoteURL)
+	fmt.Fprintf(os.Stderr, "Bootstrapped from remote: %s\n", remoteURL)
 	return true, nil
+}
+
+// BootstrapFromGitRemoteWithDB is deprecated. Use BootstrapFromRemoteWithDB instead.
+func BootstrapFromGitRemoteWithDB(ctx context.Context, doltDir, gitRemoteURL, database string) (bool, error) {
+	return BootstrapFromRemoteWithDB(ctx, doltDir, gitRemoteURL, database)
 }
 
 // doltExists checks if a Dolt database directory exists

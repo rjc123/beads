@@ -8,7 +8,9 @@ Thank you for your interest in contributing to bd! This document provides guidel
 
 - Go 1.24 or later
 - Git
+- A C compiler (CGO is required for the embedded Dolt database)
 - (Optional) golangci-lint for local linting
+- ICU headers are **not required** for building -- see [docs/ICU-POLICY.md](docs/ICU-POLICY.md)
 
 ### Getting Started
 
@@ -17,8 +19,8 @@ Thank you for your interest in contributing to bd! This document provides guidel
 git clone https://github.com/steveyegge/beads
 cd beads
 
-# Build the project
-go build -o bd ./cmd/bd
+# Build the project (uses gms_pure_go tag via Makefile)
+make build
 
 # Run tests
 go test ./...
@@ -27,7 +29,7 @@ go test ./...
 go test -race ./...
 
 # Build and install locally
-go install ./cmd/bd
+make install
 ```
 
 ## Project Structure
@@ -192,7 +194,13 @@ make test-full-cgo            # or: ./scripts/test-cgo.sh ./...
 ./scripts/test-cgo.sh -run '^TestMyFeature$' ./cmd/bd/...
 ```
 
-On macOS, always use the script or Make target for CGO tests — they configure the required ICU linker flags automatically.
+On macOS, always use the script or Make target for CGO tests -- they configure the required ICU linker flags automatically.
+
+### ICU and Build Tags
+
+All production builds use `-tags gms_pure_go` to avoid ICU runtime dependencies.
+**Do not add ICU linker flags to the Makefile or `.buildflags`.**
+See [docs/ICU-POLICY.md](docs/ICU-POLICY.md) for the full policy and rationale.
 
 ### Test Isolation with `t.TempDir()`
 
@@ -276,6 +284,17 @@ When proposing new features:
 - Describe the proposed solution
 - Consider backwards compatibility
 - Discuss alternatives you've considered
+
+## Your PR Will Not Be Overwritten
+
+This project uses AI agents for maintenance. We've established strict rules to protect contributor work:
+
+- **Your PR has priority.** If you've submitted a PR, agents must review and build on your work — not rewrite it from scratch.
+- **Your tests matter.** Agents must preserve contributor tests unless they're actually wrong.
+- **You'll get attribution.** Your commits and `Co-authored-by:` will be preserved.
+- **No silent closes.** Your PR will never be auto-closed by a parallel rewrite. If changes are needed, they'll be discussed on your PR.
+
+If any of this goes wrong, please open an issue — we take contributor experience seriously.
 
 ## Code Review Process
 

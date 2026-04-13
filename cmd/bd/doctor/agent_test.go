@@ -24,7 +24,7 @@ func TestEnrichFreshClone_UsesBootstrapFirstGuidance(t *testing.T) {
 }
 
 func TestEnrichFreshClone_WithSyncRemoteMentionsBootstrapAndFallback(t *testing.T) {
-	dc := DoctorCheck{Name: "Fresh Clone", Message: "sync.git-remote is configured but database not found"}
+	dc := DoctorCheck{Name: "Fresh Clone", Message: "sync.remote is configured but database not found"}
 	enrichment := enrichFreshClone(dc)
 
 	if !strings.Contains(enrichment.explanation, "bd bootstrap") {
@@ -33,7 +33,7 @@ func TestEnrichFreshClone_WithSyncRemoteMentionsBootstrapAndFallback(t *testing.
 	if len(enrichment.commands) != 2 || enrichment.commands[0] != "bd bootstrap" {
 		t.Fatalf("expected bootstrap-first command list, got %#v", enrichment.commands)
 	}
-	if !strings.Contains(enrichment.commands[1], "sync.git-remote") {
-		t.Fatalf("expected sync.git-remote fallback command, got %#v", enrichment.commands)
+	if !strings.Contains(enrichment.commands[1], "sync.remote") {
+		t.Fatalf("expected sync.remote fallback command, got %#v", enrichment.commands)
 	}
 }

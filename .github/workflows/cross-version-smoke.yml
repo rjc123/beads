@@ -1,62 +1,86 @@
-name: Cross-Version Smoke Test
+name: Cross-Version Smoke Tests
 
 on:
+  # On tag push (release gate): test the last 30 releases for broad regression coverage
   push:
-    tags: ['v*']
+    tags:
+      - 'v*'
+
+  # On PR to main: test only the last 5 releases for fast feedback
+  pull_request:
+    branches: [ main ]
+
+  # Allow manual trigger with custom version count
   workflow_dispatch:
     inputs:
-      versions:
-        description: 'Versions to test (space-separated, e.g. "v0.55.0 v0.56.1"), or empty for last 30'
+      version_count:
+        description: 'Number of previous releases to test against'
         required: false
-        default: ''
+        default: '5'
 
 jobs:
-  smoke-test:
-    name: Cross-version compatibility
+  smoke:
+    name: Upgrade smoke (${{ matrix.prev_version }} → candidate)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
+
+    strategy:
+      fail-fast: false
+      matrix:
+        prev_version: ${{ fromJson(needs.versions.outputs.matrix) }}
+
+    needs: versions
+
     steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
+      - uses: actions/checkout@v4
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v5
         with:
           go-version-file: 'go.mod'
 
       - name: Install ICU4C
         run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list
           sudo apt-get update
           sudo apt-get install -y libicu-dev
-
-      - name: Install Dolt
-        run: |
-          curl -fsSL https://github.com/dolthub/dolt/releases/latest/download/install.sh | sudo bash
-          dolt version
 
       - name: Configure Git
         run: |
           git config --global user.name "CI Bot"
           git config --global user.email "ci@beads.test"
 
-      - name: Cache old binaries
+      - name: Cache previous release binaries
         uses: actions/cache@v5
         with:
           path: ~/.cache/beads-regression
-          key: cross-version-${{ runner.os }}-${{ runner.arch }}
+          key: smoke-binaries-${{ matrix.prev_version }}-${{ runner.os }}
 
-      - name: Build candidate
-        run: go build -o bd ./cmd/bd
+      - name: Build candidate binary
+        run: go build -o /tmp/bd-candidate ./cmd/bd
 
-      - name: Run cross-version smoke tests
+      - name: Run upgrade smoke tests
         env:
-          CANDIDATE_BIN: ./bd
-          GIT_CONFIG_NOSYSTEM: "1"
-          BEADS_TEST_MODE: "1"
+          CANDIDATE_BIN: /tmp/bd-candidate
+        run: ./scripts/upgrade-smoke-test.sh ${{ matrix.prev_version }}
+
+  versions:
+    name: Resolve versions to test
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.resolve.outputs.matrix }}
+    steps:
+      - name: Resolve release versions
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Tag push and manual dispatch test more versions; PRs test fewer for speed
+          VERSION_COUNT: ${{ (github.event_name == 'push' && '30') || (github.event_name == 'workflow_dispatch' && inputs.version_count) || '5' }}
         run: |
-          if [ -n "${{ github.event.inputs.versions }}" ]; then
-            ./scripts/cross-version-smoke-test.sh ${{ github.event.inputs.versions }}
-          else
-            ./scripts/cross-version-smoke-test.sh
-          fi
+          VERSIONS=$(gh release list \
+            --repo gastownhall/beads \
+            --limit "$VERSION_COUNT" \
+            --json tagName \
+            --jq '[.[].tagName]')
+          echo "matrix=$VERSIONS" >> "$GITHUB_OUTPUT"
+          echo "Testing versions: $VERSIONS"

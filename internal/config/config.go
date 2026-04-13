@@ -144,7 +144,7 @@ func Initialize() error {
 	v.SetDefault("sync.require_confirmation_on_mass_delete", false)
 
 	// Federation configuration (optional Dolt remote)
-	v.SetDefault("federation.remote", "")      // e.g., dolthub://org/beads, gs://bucket/beads, s3://bucket/beads
+	v.SetDefault("federation.remote", "")      // e.g., dolthub://org/beads, gs://bucket/beads, s3://bucket/beads, az://account.blob.core.windows.net/container/beads
 	v.SetDefault("federation.sovereignty", "") // T1 | T2 | T3 | T4 (empty = no restriction)
 
 	// Push configuration defaults
@@ -308,6 +308,21 @@ func GetValueSource(key string) ConfigSource {
 	}
 
 	return SourceDefault
+}
+
+// EnvVarName returns the environment variable name that would override the given
+// config key, if one is set. Returns the BD_ or BEADS_ prefixed name, or empty
+// string if no env var is set for this key.
+func EnvVarName(key string) string {
+	envKey := "BD_" + strings.ToUpper(strings.ReplaceAll(strings.ReplaceAll(key, "-", "_"), ".", "_"))
+	if _, ok := os.LookupEnv(envKey); ok {
+		return envKey
+	}
+	beadsEnvKey := "BEADS_" + strings.ToUpper(strings.ReplaceAll(strings.ReplaceAll(key, "-", "_"), ".", "_"))
+	if _, ok := os.LookupEnv(beadsEnvKey); ok {
+		return beadsEnvKey
+	}
+	return ""
 }
 
 // CheckOverrides checks for configuration overrides and returns a list of detected overrides.
@@ -562,6 +577,15 @@ func AllSettings() map[string]interface{} {
 		return map[string]interface{}{}
 	}
 	return v.AllSettings()
+}
+
+// AllKeys returns all keys in the viper registry (defaults + config file + env).
+// Keys are returned in lowercase dot-notation (e.g., "federation.remote").
+func AllKeys() []string {
+	if v == nil {
+		return nil
+	}
+	return v.AllKeys()
 }
 
 // ConfigFileUsed returns the path to the config file that was loaded.

@@ -5,6 +5,11 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  merge_group:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   # Fast check to ensure all version files are in sync
@@ -31,6 +36,7 @@ jobs:
 
       - name: Install ICU4C
         run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list
           sudo apt-get update
           sudo apt-get install -y libicu-dev
 
@@ -94,6 +100,7 @@ jobs:
       - name: Install ICU4C (Linux)
         if: matrix.os == 'ubuntu-latest'
         run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list
           sudo apt-get update
           sudo apt-get install -y libicu-dev
 
@@ -165,6 +172,7 @@ jobs:
 
       - name: Install ICU4C
         run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list
           sudo apt-get update
           sudo apt-get install -y libicu-dev
 
@@ -196,6 +204,7 @@ jobs:
 
       - name: Install ICU4C
         run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list
           sudo apt-get update
           sudo apt-get install -y libicu-dev
 
@@ -232,6 +241,7 @@ jobs:
 
       - name: Install ICU4C
         run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list
           sudo apt-get update
           sudo apt-get install -y libicu-dev
 
@@ -313,6 +323,7 @@ jobs:
 
       - name: Install ICU4C (Linux)
         run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list
           sudo apt-get update
           sudo apt-get install -y libicu-dev
 

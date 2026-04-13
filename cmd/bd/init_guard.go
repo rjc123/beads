@@ -10,6 +10,7 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 
+	"github.com/steveyegge/beads/internal/storage/doltutil"
 	"github.com/steveyegge/beads/internal/ui"
 )
 
@@ -27,14 +28,14 @@ type initGuardDBCheck struct {
 //
 // Returns Reachable=false when the server cannot be reached (FR-030), so the
 // caller can fall through to existing "already initialized" behavior.
-func checkDatabaseOnServer(host string, port int, user, password, dbName string) initGuardDBCheck {
-	var userPart string
-	if password != "" {
-		userPart = fmt.Sprintf("%s:%s", user, password)
-	} else {
-		userPart = user
-	}
-	dsn := fmt.Sprintf("%s@tcp(%s:%d)/?timeout=5s", userPart, host, port)
+func checkDatabaseOnServer(host string, port int, user, password, dbName string, tls bool) initGuardDBCheck {
+	dsn := doltutil.ServerDSN{
+		Host:     host,
+		Port:     port,
+		User:     user,
+		Password: password,
+		TLS:      tls,
+	}.String()
 
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
@@ -83,7 +84,7 @@ func checkDatabaseOnServer(host string, port int, user, password, dbName string)
 // that command destroys all existing issue data.  An AI agent running inside a
 // git hook blindly followed the previous suggestion and wiped a production
 // database.  Instead we guide the user toward safe diagnostic commands.
-func initGuardServerMessage(dbName, host string, port int, prefix, syncGitRemote string) error {
+func initGuardServerMessage(dbName, host string, port int, prefix, syncRemote string) error {
 	var b strings.Builder
 	fmt.Fprintf(&b, "\n%s Database %q not found on server at %s:%d.\n", ui.RenderWarn("⚠"), dbName, host, port)
 	b.WriteString("The server is running but this database hasn't been created yet.\n")
@@ -96,13 +97,13 @@ func initGuardServerMessage(dbName, host string, port int, prefix, syncGitRemote
 	b.WriteString("  bd bootstrap\n")
 	b.WriteString("This is the safe entry point for existing-project recovery and may recover or initialize depending on detected state.\n")
 
-	if syncGitRemote != "" {
-		fmt.Fprintf(&b, "\nTip: sync.git-remote is configured (%s).\n", syncGitRemote)
+	if syncRemote != "" {
+		fmt.Fprintf(&b, "\nTip: sync.remote is configured (%s).\n", syncRemote)
 		b.WriteString("Run bd bootstrap to recover from the configured remote, or use --dry-run to inspect the plan first.\n")
 	} else {
 		b.WriteString("\nIf this is a brand-new project, create the database with:\n")
 		fmt.Fprintf(&b, "  bd init --prefix %s\n", prefix)
-		b.WriteString("\nIf bd bootstrap cannot find the expected remote automatically, set sync.git-remote\n")
+		b.WriteString("\nIf bd bootstrap cannot find the expected remote automatically, set sync.remote\n")
 		b.WriteString("in .beads/config.yaml and re-run bd bootstrap.\n")
 	}
 

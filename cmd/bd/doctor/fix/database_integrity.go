@@ -56,7 +56,7 @@ func doltIntegrityRecovery(path, beadsDir string) error {
 	}
 
 	// Reinitialize: bd init --force -q
-	// bd init will clone from remote if sync.git-remote is configured.
+	// bd init will clone from remote if sync.remote is configured.
 	fmt.Printf("  Reinitializing Dolt database (will clone from remote if configured)\n")
 	initCmd := newBdCmd(bdBinary, "init", "--force", "-q", "--skip-hooks")
 	initCmd.Dir = path

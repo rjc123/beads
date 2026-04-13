@@ -5,10 +5,13 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/steveyegge/beads/internal/beads"
+	"github.com/steveyegge/beads/internal/git"
 )
 
 // CheckResult represents the result of a single preflight check.
@@ -289,7 +292,42 @@ func runFmtCheck() CheckResult {
 func runBeadsPollutionCheck() CheckResult {
 	command := "git diff -- .beads/issues.jsonl"
 
-	// Determine current branch
+	beadsDir := beads.FindBeadsDir()
+	if beadsDir == "" {
+		return CheckResult{
+			Name:    "No beads pollution",
+			Passed:  true,
+			Command: command,
+		}
+	}
+
+	// git diff requires a path relative to the worktree root.
+	// If beadsDir points outside the worktree (shared .beads in a
+	// worktree setup), convert to a relative path. When the path is
+	// outside the worktree, the pollution check is skipped since git
+	// cannot diff paths outside the working tree.
+	issuesPath := filepath.Join(beadsDir, "issues.jsonl")
+	if filepath.IsAbs(issuesPath) {
+		repoRoot := git.GetRepoRoot()
+		if repoRoot == "" {
+			return CheckResult{
+				Name:    "No beads pollution",
+				Passed:  true,
+				Command: command,
+			}
+		}
+		rel, err := filepath.Rel(repoRoot, issuesPath)
+		if err != nil || isPathOutsideRepo(rel) {
+			return CheckResult{
+				Name:    "No beads pollution",
+				Passed:  true,
+				Command: command,
+				Output:  "Skipped: .beads is outside working tree (worktree setup)",
+			}
+		}
+		issuesPath = rel
+	}
+
 	branchCmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
 	branchOut, err := branchCmd.Output()
 	if err != nil {
@@ -305,14 +343,12 @@ func runBeadsPollutionCheck() CheckResult {
 
 	var diffOutput []byte
 	if branch != "main" && branch != "HEAD" {
-		// Feature branch: diff against merge base with origin/main
-		cmd := exec.Command("git", "diff", "origin/main...HEAD", "--", ".beads/issues.jsonl")
+		cmd := exec.Command("git", "diff", "origin/main...HEAD", "--", issuesPath)
 		diffOutput, _ = cmd.Output()
 	} else {
-		// On main or detached HEAD: check staged + unstaged changes
-		cmd := exec.Command("git", "diff", "HEAD", "--", ".beads/issues.jsonl")
+		cmd := exec.Command("git", "diff", "HEAD", "--", issuesPath)
 		out1, _ := cmd.Output()
-		cmd2 := exec.Command("git", "diff", "--cached", "--", ".beads/issues.jsonl")
+		cmd2 := exec.Command("git", "diff", "--cached", "--", issuesPath)
 		out2, _ := cmd2.Output()
 		diffOutput = append(out1, out2...)
 	}
@@ -331,6 +367,19 @@ func runBeadsPollutionCheck() CheckResult {
 		Passed:  true,
 		Command: command,
 	}
+}
+
+// isPathOutsideRepo checks if a relative path (from filepath.Rel) points
+// outside the base directory by inspecting the first path segment.
+func isPathOutsideRepo(rel string) bool {
+	if rel == "" {
+		return false
+	}
+	first := rel
+	if i := strings.IndexAny(rel, "/\\"); i > 0 {
+		first = rel[:i]
+	}
+	return first == ".."
 }
 
 // runNixHashCheck checks if go.sum has uncommitted changes that may require vendorHash update.

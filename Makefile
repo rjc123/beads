@@ -9,7 +9,7 @@ SHELL := $(subst cmd,bin,$(subst git.exe,bash.exe,$(GIT_BASH)))
 endif
 endif
 
-.PHONY: all build test test-full-cgo test-regression test-upgrade test-cross-version bench bench-quick clean install install-force help check-up-to-date fmt fmt-check
+.PHONY: all build test test-full-cgo test-regression test-upgrade test-cross-version test-migration bench bench-quick clean install install-force help check-up-to-date fmt fmt-check
 
 # Default target
 all: build
@@ -40,30 +40,19 @@ ifneq ($(GO_VERSION),)
 export GOTOOLCHAIN := go$(GO_VERSION)
 endif
 
-# ICU4C is keg-only in Homebrew (not symlinked into the prefix).
-# Dolt's go-icu-regex dependency needs these paths to compile and link.
-# This handles both macOS (brew --prefix icu4c) and Linux/Linuxbrew.
-# On Windows, ICU is not needed (pure-Go regex via gms_pure_go + regex_windows.go).
-ifneq ($(OS),Windows_NT)
-ICU_PREFIX := $(shell brew --prefix icu4c 2>/dev/null)
-ifneq ($(ICU_PREFIX),)
-export CGO_CFLAGS   += -I$(ICU_PREFIX)/include
-export CGO_CPPFLAGS += -I$(ICU_PREFIX)/include
-export CGO_LDFLAGS  += -L$(ICU_PREFIX)/lib
-# Linuxbrew gcc doesn't install a 'c++' symlink; point CGO at g++
-ifeq ($(shell uname),Linux)
-export CXX ?= g++
-endif
-endif
-endif
+# gms_pure_go tells go-mysql-server to use Go's stdlib regex instead of
+# ICU-backed go-icu-regex.  This eliminates the ICU shared-library runtime
+# dependency, making release binaries portable across Linux distros.
+# ICU flags are only needed for test-cgo.sh (which exercises the ICU path).
+BUILD_TAGS := gms_pure_go
 
 # Build the bd binary
 build:
 	@echo "Building bd..."
 ifeq ($(OS),Windows_NT)
-	go build -tags gms_pure_go -ldflags="-X main.Build=$(GIT_BUILD)" -o $(BUILD_DIR)/bd.exe ./cmd/bd
+	go build -tags "$(BUILD_TAGS)" -ldflags="-X main.Build=$(GIT_BUILD)" -o $(BUILD_DIR)/bd.exe ./cmd/bd
 else
-	go build -ldflags="-X main.Build=$(GIT_BUILD)" -o $(BUILD_DIR)/bd ./cmd/bd
+	go build -tags "$(BUILD_TAGS)" -ldflags="-X main.Build=$(GIT_BUILD)" -o $(BUILD_DIR)/bd ./cmd/bd
 ifeq ($(shell uname),Darwin)
 	@codesign -s - -f $(BUILD_DIR)/bd 2>/dev/null || true
 	@echo "Signed bd for macOS"
@@ -95,6 +84,7 @@ test-upgrade: build
 	@echo "Running upgrade smoke tests..."
 	@CANDIDATE_BIN=./bd ./scripts/upgrade-smoke-test.sh
 
+
 # Run cross-version smoke tests (last 30 tags → candidate).
 # Creates epic, issues, and dependencies with old versions, upgrades, verifies.
 # Specific versions: ./scripts/cross-version-smoke-test.sh v0.55.0 v0.56.1
@@ -102,6 +92,15 @@ test-upgrade: build
 test-cross-version: build
 	@echo "Running cross-version smoke tests..."
 	@CANDIDATE_BIN=./bd ./scripts/cross-version-smoke-test.sh
+
+# Run migration test harness (rich dataset, fidelity checks, recipe discovery).
+# Tests direct and stepping-stone upgrade paths from all storage eras.
+# Direct only: ./scripts/migration-test/run.sh --direct-only
+# Single version: ./scripts/migration-test/run.sh v0.49.6
+test-migration: build
+	@echo "Running migration test harness..."
+	@CANDIDATE_BIN=./bd ./scripts/migration-test/run.sh
+
 
 # Run performance benchmarks against Dolt storage backend
 # Requires CGO and Dolt; generates CPU profile files
@@ -196,6 +195,7 @@ help:
 	@echo "  make test-regression - Run differential regression tests (baseline vs candidate)"
 	@echo "  make test-upgrade  - Run upgrade smoke tests (release stability gate)"
 	@echo "  make test-cross-version - Run cross-version smoke tests (last 30 tags)"
+	@echo "  make test-migration - Run migration test harness (fidelity checks, recipes)"
 	@echo "  make bench        - Run performance benchmarks (generates CPU profiles)"
 	@echo "  make bench-quick  - Run quick benchmarks (shorter benchtime)"
 	@echo "  make install      - Install bd to ~/.local/bin (with codesign on macOS, includes 'beads' alias)"

@@ -8,6 +8,8 @@ import (
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
+
+	"github.com/steveyegge/beads/internal/storage/doltutil"
 )
 
 // freshCloneDBCheck holds the result of checking whether a database exists on
@@ -22,14 +24,14 @@ type freshCloneDBCheck struct {
 // whether the named database exists via SHOW DATABASES. The connection is
 // closed before returning. Returns Reachable=false when the server cannot be
 // reached, so the caller can skip the server-mode check (FR-030).
-func checkFreshCloneDB(host string, port int, user, password, dbName string) freshCloneDBCheck {
-	var userPart string
-	if password != "" {
-		userPart = fmt.Sprintf("%s:%s", user, password)
-	} else {
-		userPart = user
-	}
-	dsn := fmt.Sprintf("%s@tcp(%s:%d)/?timeout=5s", userPart, host, port)
+func checkFreshCloneDB(host string, port int, user, password, dbName string, tls bool) freshCloneDBCheck {
+	dsn := doltutil.ServerDSN{
+		Host:     host,
+		Port:     port,
+		User:     user,
+		Password: password,
+		TLS:      tls,
+	}.String()
 
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
@@ -73,10 +75,10 @@ func checkFreshCloneDB(host string, port int, user, password, dbName string) fre
 //
 // When dbExists is true, returns StatusOK (FR-021).
 // When dbExists is false and syncGitRemote is empty, returns StatusWarning
-// suggesting the user set sync.git-remote (FR-020).
+// suggesting the user set sync.remote (FR-020).
 // When dbExists is false and syncGitRemote is set, returns StatusWarning
 // suggesting bd init to bootstrap from the remote.
-func freshCloneServerResult(dbExists bool, dbName, host string, port int, syncGitRemote string) DoctorCheck {
+func freshCloneServerResult(dbExists bool, dbName, host string, port int, syncRemote string) DoctorCheck {
 	if dbExists {
 		return DoctorCheck{
 			Name:    "Fresh Clone",
@@ -89,11 +91,11 @@ func freshCloneServerResult(dbExists bool, dbName, host string, port int, syncGi
 	fmt.Fprintf(&msg, "Fresh clone detected: database %q not found on server at %s:%d.", dbName, host, port)
 
 	fix := "bd bootstrap"
-	if syncGitRemote == "" {
-		msg.WriteString(" Run bd bootstrap first as the safe recovery entry point. It may recover existing state or initialize if no prior state can be found. If bootstrap cannot find the expected remote automatically, then set sync.git-remote in .beads/config.yaml and rerun bd bootstrap.")
+	if syncRemote == "" {
+		msg.WriteString(" Run bd bootstrap first as the safe recovery entry point. It may recover existing state or initialize if no prior state can be found. If bootstrap cannot find the expected remote automatically, then set sync.remote in .beads/config.yaml and rerun bd bootstrap.")
 		fix = "bd bootstrap"
 	} else {
-		fmt.Fprintf(&msg, " sync.git-remote is configured (%s) — run bd bootstrap to recover from the remote, or use --dry-run to inspect the plan first.", syncGitRemote)
+		fmt.Fprintf(&msg, " sync.remote is configured (%s) — run bd bootstrap to recover from the remote, or use --dry-run to inspect the plan first.", syncRemote)
 	}
 
 	return DoctorCheck{

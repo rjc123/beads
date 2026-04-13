@@ -7,20 +7,28 @@ from pydantic import BaseModel, Field, field_validator
 
 # Type aliases for issue statuses, types, and dependencies
 #
-# IssueStatus and IssueType are strings (not Literals) to support custom
-# statuses and types configured via:
+# IssueStatus, IssueType, and DependencyType are strings (not Literals) so the
+# MCP layer doesn't have to be kept in lockstep with every dep type / status /
+# issue type the bd CLI emits. The CLI is the source of truth and validates
+# these values against the configured (or built-in) options.
+#
+# Custom statuses and types are configured via:
 #   bd config set status.custom "in_review:active,qa_testing:wip,on_hold:frozen"
 #   bd config set types.custom "agent,molecule,event"
 #
 # Custom statuses support optional category annotations (active, wip, done, frozen)
 # that control behavior in bd ready and bd list. See docs/CLI_REFERENCE.md.
 #
-# The CLI handles validation of these values against the configured options.
 # Built-in statuses: open, in_progress, blocked, deferred, closed
 # Built-in types: bug, feature, task, epic, chore, decision
+# Built-in dependency types (see internal/types/types.go):
+#   blocks, parent-child, conditional-blocks, waits-for, related,
+#   discovered-from, replies-to, relates-to, duplicates, supersedes,
+#   authored-by, assigned-to, approved-by, attests, tracks, until,
+#   caused-by, validates, delegated-from
 IssueStatus = str
 IssueType = str
-DependencyType = Literal["blocks", "related", "parent-child", "discovered-from"]
+DependencyType = str
 OperationAction = Literal["created", "updated", "claimed", "closed", "reopened"]
 
 

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/steveyegge/beads/internal/config"
 	"github.com/steveyegge/beads/internal/configfile"
@@ -1263,6 +1264,31 @@ func TestSharedDoltDir(t *testing.T) {
 	}
 }
 
+func TestSharedServerDir_EnvOverride(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("BEADS_SHARED_SERVER_DIR", tmp)
+	dir, err := SharedServerDir()
+	if err != nil {
+		t.Fatalf("SharedServerDir: %v", err)
+	}
+	if dir != tmp {
+		t.Errorf("SharedServerDir = %q, want %q (from BEADS_SHARED_SERVER_DIR)", dir, tmp)
+	}
+}
+
+func TestSharedDoltDir_EnvOverride(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("BEADS_SHARED_SERVER_DIR", tmp)
+	dir, err := SharedDoltDir()
+	if err != nil {
+		t.Fatalf("SharedDoltDir: %v", err)
+	}
+	expected := filepath.Join(tmp, "dolt")
+	if dir != expected {
+		t.Errorf("SharedDoltDir = %q, want %q", dir, expected)
+	}
+}
+
 func TestResolveServerDir_PerProject(t *testing.T) {
 	t.Setenv("BEADS_DOLT_SHARED_SERVER", "")
 	config.ResetForTesting()
@@ -1509,4 +1535,242 @@ func TestResolveServerMode_EmbeddedHonoredWithoutServerEnv(t *testing.T) {
 	if got != ServerModeEmbedded {
 		t.Errorf("ResolveServerMode with no server env = %v, want ServerModeEmbedded", got)
 	}
+}
+
+func TestReadyTimeout(t *testing.T) {
+	tests := []struct {
+		name     string
+		envValue string
+		setEnv   bool
+		want     time.Duration
+	}{
+		{"unset defaults to 10s", "", false, 10 * time.Second},
+		{"empty string defaults to 10s", "", true, 10 * time.Second},
+		{"valid integer seconds", "120", true, 120 * time.Second},
+		{"whitespace is trimmed", "  60  ", true, 60 * time.Second},
+		{"invalid string falls back", "notanumber", true, 10 * time.Second},
+		{"zero falls back", "0", true, 10 * time.Second},
+		{"negative falls back", "-5", true, 10 * time.Second},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.setEnv {
+				t.Setenv("BEADS_DOLT_READY_TIMEOUT", tt.envValue)
+			} else {
+				// Save and restore any pre-existing value so we don't
+				// leak env state into subsequent tests.
+				if prev, ok := os.LookupEnv("BEADS_DOLT_READY_TIMEOUT"); ok {
+					t.Cleanup(func() { os.Setenv("BEADS_DOLT_READY_TIMEOUT", prev) })
+				}
+				os.Unsetenv("BEADS_DOLT_READY_TIMEOUT")
+			}
+			got := readyTimeout()
+			if got != tt.want {
+				t.Errorf("readyTimeout() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestBuildDoltServerArgs verifies the argv constructed for `dolt sql-server`
+// always includes a non-info --loglevel and the expected host/port. This
+// pins the fix for the field report where dolt-server.log ballooned to
+// hundreds of MB with `msg=NewConnection` / `msg=ConnectionClosed` spam
+// because dolt logs connection open/close at INFO by default.
+//
+// If this test fails because someone intentionally lowered verbosity back
+// to info/debug/trace, please instead pick a different mitigation (e.g.
+// dolt YAML config) and update doltServerLogLevel plus this test together.
+func TestBuildDoltServerArgs(t *testing.T) {
+	tests := []struct {
+		name     string
+		host     string
+		port     int
+		wantHost string
+		wantPort string
+	}{
+		{
+			name:     "loopback ipv4 with ephemeral-style port",
+			host:     "127.0.0.1",
+			port:     54321,
+			wantHost: "127.0.0.1",
+			wantPort: "54321",
+		},
+		{
+			name:     "localhost hostname with default dolt port",
+			host:     "localhost",
+			port:     3306,
+			wantHost: "localhost",
+			wantPort: "3306",
+		},
+		{
+			name:     "ipv6 loopback with low port",
+			host:     "::1",
+			port:     1024,
+			wantHost: "::1",
+			wantPort: "1024",
+		},
+	}
+
+	// Levels that MUST NOT appear — anything at or below info re-introduces
+	// the NewConnection/ConnectionClosed noise we are trying to suppress.
+	forbiddenLevels := []string{"trace", "debug", "info"}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			args := buildDoltServerArgs(tc.host, tc.port)
+
+			if len(args) == 0 || args[0] != "sql-server" {
+				t.Fatalf("args[0] = %q, want %q; full args: %v",
+					firstOrEmpty(args), "sql-server", args)
+			}
+
+			// -H <host>
+			hostIdx := indexOf(args, "-H")
+			if hostIdx < 0 || hostIdx+1 >= len(args) {
+				t.Fatalf("missing -H <host> in args: %v", args)
+			}
+			if got := args[hostIdx+1]; got != tc.wantHost {
+				t.Errorf("host = %q, want %q", got, tc.wantHost)
+			}
+
+			// -P <port>
+			portIdx := indexOf(args, "-P")
+			if portIdx < 0 || portIdx+1 >= len(args) {
+				t.Fatalf("missing -P <port> in args: %v", args)
+			}
+			if got := args[portIdx+1]; got != tc.wantPort {
+				t.Errorf("port = %q, want %q", got, tc.wantPort)
+			}
+
+			// --loglevel=<level> — the actual fix.
+			logLevel, ok := findLogLevel(args)
+			if !ok {
+				t.Fatalf("missing --loglevel flag in args; got: %v", args)
+			}
+			for _, bad := range forbiddenLevels {
+				if logLevel == bad {
+					t.Errorf("--loglevel=%s is too verbose; "+
+						"dolt logs NewConnection/ConnectionClosed at INFO, "+
+						"which caused the ~380MB dolt-server.log field report. "+
+						"Use warning/error/fatal instead.", logLevel)
+				}
+			}
+			// Sanity-check we're using a level dolt actually accepts.
+			validLevels := map[string]bool{
+				"trace": true, "debug": true, "info": true,
+				"warning": true, "error": true, "fatal": true,
+			}
+			if !validLevels[logLevel] {
+				t.Errorf("--loglevel=%s is not a valid dolt log level "+
+					"(valid: trace, debug, info, warning, error, fatal)",
+					logLevel)
+			}
+		})
+	}
+}
+
+func TestWaitForReady(t *testing.T) {
+	// Allocate an ephemeral port, then release it so we can re-bind later.
+	tmpListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("could not allocate ephemeral port: %v", err)
+	}
+	addr := tmpListener.Addr().(*net.TCPAddr)
+	host := "127.0.0.1"
+	port := addr.Port
+	if err := tmpListener.Close(); err != nil {
+		t.Fatalf("could not release ephemeral port: %v", err)
+	}
+
+	// Spawn a goroutine that delays binding the port. This simulates a
+	// "slow server" -- the TCP listener is not yet bound when waitForReady
+	// is first called.
+	bindAfter := 200 * time.Millisecond
+	listenerReady := make(chan net.Listener, 1)
+	go func() {
+		time.Sleep(bindAfter)
+		ln, listenErr := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+		if listenErr != nil {
+			close(listenerReady)
+			return
+		}
+		listenerReady <- ln
+	}()
+	t.Cleanup(func() {
+		ln, ok := <-listenerReady
+		if ok && ln != nil {
+			_ = ln.Close()
+		}
+	})
+
+	// NOTE: subtests must run in declaration order (the default for
+	// non-parallel subtests). "times out" runs before the goroutine binds
+	// the port; "succeeds" runs after.
+	t.Run("times out when server not ready in time", func(t *testing.T) {
+		// 50ms is well under the 200ms bind delay, so this MUST time out.
+		if err := waitForReady(host, port, 50*time.Millisecond); err == nil {
+			t.Errorf("expected timeout error, got nil")
+		}
+	})
+
+	t.Run("succeeds when server becomes ready in time", func(t *testing.T) {
+		// 2 seconds is well over the remaining bind delay; gives comfortable margin.
+		if err := waitForReady(host, port, 2*time.Second); err != nil {
+			t.Errorf("expected nil error, got: %v", err)
+		}
+	})
+}
+
+// TestDoltServerLogLevelConstant pins doltServerLogLevel to a non-chatty
+// value. It complements TestBuildDoltServerArgs by guarding the constant
+// directly, so a refactor that stops calling buildDoltServerArgs cannot
+// silently regress the fix.
+func TestDoltServerLogLevelConstant(t *testing.T) {
+	switch doltServerLogLevel {
+	case "warning", "error", "fatal":
+		// ok — these all suppress INFO-level NewConnection noise.
+	default:
+		t.Errorf("doltServerLogLevel = %q; must be one of "+
+			"warning/error/fatal to suppress NewConnection/ConnectionClosed "+
+			"log spam (see dolt-connection-log-verbosity field report)",
+			doltServerLogLevel)
+	}
+}
+
+// indexOf returns the index of the first occurrence of needle in haystack,
+// or -1 if not found. Local helper to keep the test self-contained.
+func indexOf(haystack []string, needle string) int {
+	for i, s := range haystack {
+		if s == needle {
+			return i
+		}
+	}
+	return -1
+}
+
+// findLogLevel extracts the value of a --loglevel=<v> or --loglevel <v>
+// flag from argv. Returns the value and true if found.
+func findLogLevel(args []string) (string, bool) {
+	const prefix = "--loglevel="
+	for i, a := range args {
+		if strings.HasPrefix(a, prefix) {
+			return strings.TrimPrefix(a, prefix), true
+		}
+		if a == "--loglevel" && i+1 < len(args) {
+			return args[i+1], true
+		}
+		// Short form -l <level>
+		if a == "-l" && i+1 < len(args) {
+			return args[i+1], true
+		}
+	}
+	return "", false
+}
+
+func firstOrEmpty(s []string) string {
+	if len(s) == 0 {
+		return ""
+	}
+	return s[0]
 }

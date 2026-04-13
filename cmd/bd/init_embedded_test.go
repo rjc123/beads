@@ -584,6 +584,42 @@ func TestEmbeddedInit(t *testing.T) {
 		}
 	})
 
+	t.Run("auto_detect_dotted_dirname", func(t *testing.T) {
+		// bd init in a directory named like "MyPkg.jl" (common in Julia repos)
+		// must sanitize the dot when auto-detecting the prefix: metadata.json
+		// DoltDatabase must match the actual Dolt database name so that reopens
+		// succeed and bd list works immediately after init.
+		parent := t.TempDir()
+		dir := filepath.Join(parent, "MyPkg.jl")
+		if err := os.MkdirAll(dir, 0750); err != nil {
+			t.Fatal(err)
+		}
+		initGitRepoAt(t, dir)
+		runBDInit(t, bd, dir)
+
+		beadsDir := filepath.Join(dir, ".beads")
+		cfg, err := configfile.Load(beadsDir)
+		if err != nil {
+			t.Fatalf("failed to load metadata.json: %v", err)
+		}
+		const want = "MyPkg_jl"
+		if cfg.DoltDatabase != want {
+			t.Errorf("DoltDatabase: got %q, want %q (dot must be sanitized)", cfg.DoltDatabase, want)
+		}
+		if val := readBack(t, beadsDir, want, "issue_prefix", false); val != want {
+			t.Errorf("issue_prefix: got %q, want %q", val, want)
+		}
+
+		// Verify bd list succeeds — confirms the database name in metadata.json
+		// matches the actual Dolt database created during init.
+		listCmd := exec.Command(bd, "list", "--json")
+		listCmd.Dir = dir
+		listCmd.Env = bdEnv(dir)
+		if out, err := listCmd.CombinedOutput(); err != nil {
+			t.Fatalf("bd list failed after init in dotted dirname: %v\n%s", err, out)
+		}
+	})
+
 	t.Run("prefix_numeric_sanitized", func(t *testing.T) {
 		parent := t.TempDir()
 		dir := filepath.Join(parent, "001")
@@ -594,6 +630,47 @@ func TestEmbeddedInit(t *testing.T) {
 		runBDInit(t, bd, dir)
 		if val := readBack(t, filepath.Join(dir, ".beads"), "bd_001", "issue_prefix", false); val != "bd_001" {
 			t.Errorf("sanitized issue_prefix: got %q, want %q", val, "bd_001")
+		}
+	})
+
+	t.Run("invalid_dirname_errors_early", func(t *testing.T) {
+		// A directory name like "my project" (space) survives hyphen/dot sanitization
+		// and produces an invalid Dolt database name. The init command should exit
+		// non-zero with a human-readable error rather than a cryptic storage failure.
+		parent := t.TempDir()
+		dir := filepath.Join(parent, "my project")
+		if err := os.MkdirAll(dir, 0750); err != nil {
+			t.Fatal(err)
+		}
+		initGitRepoAt(t, dir)
+		cmd := exec.Command(bd, "init", "--quiet")
+		cmd.Dir = dir
+		cmd.Env = bdEnv(dir)
+		out, err := cmd.CombinedOutput()
+		if err == nil {
+			t.Fatal("bd init should have failed for directory with invalid name")
+		}
+		outStr := string(out)
+		if !strings.Contains(outStr, "invalid database name") && !strings.Contains(outStr, "produces an invalid") {
+			t.Errorf("expected actionable error message, got: %s", outStr)
+		}
+	})
+
+	t.Run("prefix_dot_sanitized", func(t *testing.T) {
+		// A Julia package repo like GPUPolynomials.jl passes --prefix GPUPolynomials.jl.
+		// The dot must be replaced with underscore in both the Dolt database name and
+		// metadata.json DoltDatabase, otherwise reopens fail with a name mismatch.
+		_, beadsDir, _ := bdInit(t, bd, "--prefix", "GPUPolynomials.jl")
+		cfg, err := configfile.Load(beadsDir)
+		if err != nil {
+			t.Fatalf("failed to load metadata.json: %v", err)
+		}
+		const want = "GPUPolynomials_jl"
+		if cfg.DoltDatabase != want {
+			t.Errorf("DoltDatabase: got %q, want %q", cfg.DoltDatabase, want)
+		}
+		if val := readBack(t, beadsDir, want, "issue_prefix", false); val != "GPUPolynomials_jl" {
+			t.Errorf("issue_prefix: got %q, want %q", val, "GPUPolynomials_jl")
 		}
 	})
 }

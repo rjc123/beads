@@ -1142,8 +1142,10 @@ async def reopen_issue(
 
 @mcp.tool(
     name="dep",
-    description="""Add a dependency between issues. Types: blocks (hard blocker),
-related (soft link), parent-child (epic/subtask), discovered-from (found during work).""",
+    description="""Add a dependency between issues. Common types: blocks (hard blocker),
+related (soft link), parent-child (epic/subtask), discovered-from (found during work).
+The full set of supported dep types lives in internal/types/types.go and is
+validated by the bd CLI; pass any of them as a string.""",
 )
 @with_workspace
 @require_context

@@ -13,7 +13,7 @@ func TestFreshCloneServerResult(t *testing.T) {
 		dbName         string
 		host           string
 		port           int
-		syncGitRemote  string
+		syncRemote     string
 		wantStatus     string
 		wantContains   []string
 		wantNotContain []string
@@ -29,41 +29,41 @@ func TestFreshCloneServerResult(t *testing.T) {
 				"Database exists on server",
 			},
 		},
-		"DB missing, no sync.git-remote returns Warning (FR-020)": {
-			dbExists:      false,
-			dbName:        "acf_beads",
-			host:          "127.0.0.1",
-			port:          3309,
-			syncGitRemote: "",
-			wantStatus:    StatusWarning,
+		"DB missing, no sync.remote returns Warning (FR-020)": {
+			dbExists:   false,
+			dbName:     "acf_beads",
+			host:       "127.0.0.1",
+			port:       3309,
+			syncRemote: "",
+			wantStatus: StatusWarning,
 			wantContains: []string{
 				`"acf_beads"`,
 				"not found on server",
 				"127.0.0.1:3309",
-				"sync.git-remote",
+				"sync.remote",
 				".beads/config.yaml",
 			},
 			wantNotContain: []string{
-				"sync.git-remote is configured",
+				"sync.remote is configured",
 			},
 			wantFix: "bd bootstrap",
 		},
-		"DB missing, sync.git-remote IS configured returns Warning with remote hint": {
-			dbExists:      false,
-			dbName:        "beads_kc",
-			host:          "192.168.1.50",
-			port:          3307,
-			syncGitRemote: "https://doltremoteapi.dolthub.com/myorg/beads",
-			wantStatus:    StatusWarning,
+		"DB missing, sync.remote IS configured returns Warning with remote hint": {
+			dbExists:   false,
+			dbName:     "beads_kc",
+			host:       "192.168.1.50",
+			port:       3307,
+			syncRemote: "https://doltremoteapi.dolthub.com/myorg/beads",
+			wantStatus: StatusWarning,
 			wantContains: []string{
 				`"beads_kc"`,
 				"not found on server",
-				"sync.git-remote is configured",
+				"sync.remote is configured",
 				"https://doltremoteapi.dolthub.com/myorg/beads",
 				"bd bootstrap",
 			},
 			wantNotContain: []string{
-				"Set sync.git-remote in .beads/config.yaml",
+				"Set sync.remote in .beads/config.yaml",
 			},
 			wantFix: "bd bootstrap",
 		},
@@ -71,7 +71,7 @@ func TestFreshCloneServerResult(t *testing.T) {
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			check := freshCloneServerResult(tt.dbExists, tt.dbName, tt.host, tt.port, tt.syncGitRemote)
+			check := freshCloneServerResult(tt.dbExists, tt.dbName, tt.host, tt.port, tt.syncRemote)
 
 			if check.Name != "Fresh Clone" {
 				t.Errorf("expected Name %q, got %q", "Fresh Clone", check.Name)
@@ -103,7 +103,7 @@ func TestFreshCloneServerResult(t *testing.T) {
 func TestCheckFreshCloneDB_ServerUnreachable(t *testing.T) {
 	// FR-030: When server is unreachable, should return Reachable=false
 	// so caller skips the server-mode check without panic.
-	result := checkFreshCloneDB("127.0.0.1", 1, "root", "", "nonexistent_db")
+	result := checkFreshCloneDB("127.0.0.1", 1, "root", "", "nonexistent_db", false)
 	if result.Reachable {
 		t.Fatal("expected Reachable=false for connection refused")
 	}

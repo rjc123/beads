@@ -150,30 +150,19 @@ The sync mode controls how beads synchronizes data with git and/or Dolt remotes.
 
 Beads uses `dolt-native` sync mode exclusively. Dolt remotes handle sync directly with cell-level merge. Use `bd export` for issue portability, and `bd backup init` / `bd backup sync` / `bd backup restore` for Dolt-native backups.
 
-#### Sync Triggers
-
-Control when sync operations occur:
-
-- `sync.export_on`: `push` (default) or `change`
-- `sync.import_on`: `pull` (default) or `change`
-
 #### Federation Configuration
 
-- `federation.remote`: Dolt remote URL (e.g., `dolthub://org/beads`, `gs://bucket/beads`, `s3://bucket/beads`)
+- `federation.remote`: Dolt remote URL (e.g., `dolthub://org/beads`, `gs://bucket/beads`, `s3://bucket/beads`, `az://account.blob.core.windows.net/container/beads`)
 - `federation.sovereignty`: Data sovereignty tier:
   - `T1`: Full sovereignty - data never leaves controlled infrastructure
   - `T2`: Regional sovereignty - data stays within region/jurisdiction
   - `T3`: Provider sovereignty - data with trusted cloud provider
   - `T4`: No restrictions - data can be anywhere
 
-#### Example Sync Configuration
+#### Example Configuration
 
 ```yaml
 # .beads/config.yaml
-sync:
-  export_on: push       # push | change
-  import_on: pull       # pull | change
-
 # Optional: Dolt federation
 federation:
   remote: dolthub://myorg/beads

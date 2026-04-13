@@ -14,16 +14,16 @@ func TestInitGuardServerMessage(t *testing.T) {
 		host           string
 		port           int
 		prefix         string
-		syncGitRemote  string
+		syncRemote     string
 		wantContains   []string
 		wantNotContain []string
 	}{
-		"DB missing, no sync.git-remote configured (FR-010, FR-011)": {
-			dbName:        "acf_beads",
-			host:          "127.0.0.1",
-			port:          3309,
-			prefix:        "acf",
-			syncGitRemote: "",
+		"DB missing, no sync.remote configured (FR-010, FR-011)": {
+			dbName:     "acf_beads",
+			host:       "127.0.0.1",
+			port:       3309,
+			prefix:     "acf",
+			syncRemote: "",
 			wantContains: []string{
 				`"acf_beads"`,
 				"127.0.0.1:3309",
@@ -31,23 +31,23 @@ func TestInitGuardServerMessage(t *testing.T) {
 				"bd doctor",
 				"bd dolt status",
 				"bd bootstrap",
-				"set sync.git-remote",
+				"set sync.remote",
 				".beads/config.yaml",
 				"Aborting",
 				"--force destroys ALL existing issues",
 			},
 			wantNotContain: []string{
-				"sync.git-remote is configured",
+				"sync.remote is configured",
 				// GH#2363: must NOT suggest --force as the primary action
 				"bd init --force --prefix",
 			},
 		},
-		"DB missing, sync.git-remote IS configured (FR-010, FR-011)": {
-			dbName:        "beads_kc",
-			host:          "192.168.1.50",
-			port:          3307,
-			prefix:        "kc",
-			syncGitRemote: "https://doltremoteapi.dolthub.com/myorg/beads",
+		"DB missing, sync.remote IS configured (FR-010, FR-011)": {
+			dbName:     "beads_kc",
+			host:       "192.168.1.50",
+			port:       3307,
+			prefix:     "kc",
+			syncRemote: "https://doltremoteapi.dolthub.com/myorg/beads",
 			wantContains: []string{
 				`"beads_kc"`,
 				"192.168.1.50:3307",
@@ -55,12 +55,12 @@ func TestInitGuardServerMessage(t *testing.T) {
 				"bd doctor",
 				"bd dolt status",
 				"bd bootstrap",
-				"sync.git-remote is configured",
+				"sync.remote is configured",
 				"https://doltremoteapi.dolthub.com/myorg/beads",
 				"--force destroys ALL existing issues",
 			},
 			wantNotContain: []string{
-				"set sync.git-remote",
+				"set sync.remote",
 				// GH#2363: must NOT suggest --force as the primary action
 				"bd init --force --prefix",
 				"bd init --force to bootstrap",
@@ -70,7 +70,7 @@ func TestInitGuardServerMessage(t *testing.T) {
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			err := initGuardServerMessage(tt.dbName, tt.host, tt.port, tt.prefix, tt.syncGitRemote)
+			err := initGuardServerMessage(tt.dbName, tt.host, tt.port, tt.prefix, tt.syncRemote)
 			if err == nil {
 				t.Fatal("expected non-nil error")
 			}
@@ -131,7 +131,7 @@ func TestInitGuardDBCheck_ServerUnreachable(t *testing.T) {
 	// FR-030: When server is unreachable, should return Reachable=false
 	// so caller falls through to existing error path without panic.
 
-	result := checkDatabaseOnServer("127.0.0.1", 1, "root", "", "nonexistent_db")
+	result := checkDatabaseOnServer("127.0.0.1", 1, "root", "", "nonexistent_db", false)
 	if result.Reachable {
 		t.Fatal("expected Reachable=false for connection refused")
 	}

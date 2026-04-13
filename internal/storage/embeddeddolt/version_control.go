@@ -72,13 +72,23 @@ func (s *EmbeddedDoltStore) HasRemote(ctx context.Context, name string) (bool, e
 
 func (s *EmbeddedDoltStore) Branch(ctx context.Context, name string) error {
 	return s.withDBConn(ctx, func(db versioncontrolops.DBConn) error {
-		return versioncontrolops.CreateBranch(ctx, db, name)
+		if err := versioncontrolops.CreateBranch(ctx, db, name); err != nil {
+			return err
+		}
+		// dolt_ignore'd tables (wisps, wisp_*) don't carry over to new branches —
+		// ensure they exist on the newly created branch.
+		return versioncontrolops.EnsureIgnoredTables(ctx, db)
 	})
 }
 
 func (s *EmbeddedDoltStore) Checkout(ctx context.Context, branch string) error {
 	return s.withDBConn(ctx, func(db versioncontrolops.DBConn) error {
-		return versioncontrolops.CheckoutBranch(ctx, db, branch)
+		if err := versioncontrolops.CheckoutBranch(ctx, db, branch); err != nil {
+			return err
+		}
+		// dolt_ignore'd tables (wisps, wisp_*) may not exist on the target branch —
+		// ensure they exist after checkout.
+		return versioncontrolops.EnsureIgnoredTables(ctx, db)
 	})
 }
 
@@ -201,7 +211,7 @@ func (s *EmbeddedDoltStore) Push(ctx context.Context) error {
 
 func (s *EmbeddedDoltStore) Pull(ctx context.Context) error {
 	return s.withDBConn(ctx, func(db versioncontrolops.DBConn) error {
-		return versioncontrolops.Pull(ctx, db, defaultRemote)
+		return versioncontrolops.Pull(ctx, db, defaultRemote, s.branch)
 	})
 }
 
@@ -232,7 +242,7 @@ func (s *EmbeddedDoltStore) PullFrom(ctx context.Context, peer string) ([]storag
 
 	var conflicts []storage.Conflict
 	err := s.withDBConn(ctx, func(db versioncontrolops.DBConn) error {
-		if pullErr := versioncontrolops.Pull(ctx, db, peer); pullErr != nil {
+		if pullErr := versioncontrolops.Pull(ctx, db, peer, s.branch); pullErr != nil {
 			// Check if the error is due to merge conflicts.
 			c, conflictErr := versioncontrolops.GetConflicts(ctx, db)
 			if conflictErr == nil && len(c) > 0 {
