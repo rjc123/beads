@@ -269,6 +269,27 @@ func TestEmbeddedList(t *testing.T) {
 		}
 	})
 
+	t.Run("exclude_label", func(t *testing.T) {
+		issues := bdListJSON(t, bd, dir, "--exclude-label", "urgent")
+		// openBug has labels: backend,urgent — should be excluded
+		if containsID(issues, seed.openBug) {
+			t.Error("openBug with 'urgent' label should be excluded by --exclude-label urgent")
+		}
+		// overdueTask also has label: urgent — should be excluded
+		if containsID(issues, seed.overdueTask) {
+			t.Error("overdueTask with 'urgent' label should be excluded by --exclude-label urgent")
+		}
+	})
+
+	t.Run("exclude_label_with_include", func(t *testing.T) {
+		// Include backend but exclude urgent — should get issues with backend but not urgent
+		issues := bdListJSON(t, bd, dir, "--label", "backend", "--exclude-label", "urgent")
+		// openBug has both backend and urgent — should be excluded
+		if containsID(issues, seed.openBug) {
+			t.Error("openBug with backend+urgent should be excluded when --exclude-label urgent")
+		}
+	})
+
 	// --- C. Status/special filtering ---
 	// Note: --ready, --pinned, --status closed/deferred/in_progress tests are
 	// skipped because bd update and bd close are not yet implemented on

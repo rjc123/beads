@@ -83,6 +83,27 @@ func TestEmbeddedReady(t *testing.T) {
 			t.Errorf("blocked issue should not appear in ready output: %s", out)
 		}
 	})
+
+	// ===== Exclude Label =====
+
+	t.Run("ready_exclude_label", func(t *testing.T) {
+		bdCreate(t, bd, dir, "Triage pending item", "--type", "task", "--label", "triage:pending")
+		bdCreate(t, bd, dir, "Normal ready item", "--type", "task")
+
+		cmd := exec.Command(bd, "ready", "--exclude-label", "triage:pending")
+		cmd.Dir = dir
+		cmd.Env = bdEnv(dir)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("bd ready --exclude-label failed: %v\n%s", err, out)
+		}
+		if strings.Contains(string(out), "Triage pending item") {
+			t.Errorf("triage:pending issue should not appear with --exclude-label: %s", out)
+		}
+		if !strings.Contains(string(out), "Normal ready item") {
+			t.Errorf("normal issue should still appear with --exclude-label: %s", out)
+		}
+	})
 }
 
 func TestEmbeddedReadyConcurrent(t *testing.T) {

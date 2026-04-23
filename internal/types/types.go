@@ -1170,11 +1170,12 @@ type IssueFilter struct {
 	Priority     *int
 	IssueType    *IssueType
 	Assignee     *string
-	Labels       []string // AND semantics: issue must have ALL these labels
-	LabelsAny    []string // OR semantics: issue must have AT LEAST ONE of these labels
-	LabelPattern string   // Glob pattern for label matching (e.g., "tech-*")
-	LabelRegex   string   // Regex pattern for label matching (e.g., "tech-(debt|legacy)")
-	TitleSearch  string
+	Labels        []string // AND semantics: issue must have ALL these labels
+	LabelsAny     []string // OR semantics: issue must have AT LEAST ONE of these labels
+	ExcludeLabels []string // Exclusion: issue must NOT have ANY of these labels
+	LabelPattern  string   // Glob pattern for label matching (e.g., "tech-*")
+	LabelRegex    string   // Regex pattern for label matching (e.g., "tech-(debt|legacy)")
+	TitleSearch   string
 	IDs          []string // Filter by specific issue IDs
 	IDPrefix     string   // Filter by ID prefix (e.g., "bd-" to match "bd-abc123")
 	SpecIDPrefix string   // Filter by spec_id prefix
@@ -1285,12 +1286,13 @@ type WorkFilter struct {
 	Priority     *int
 	Assignee     *string
 	Unassigned   bool     // Filter for issues with no assignee
-	Labels       []string // AND semantics: issue must have ALL these labels
-	LabelsAny    []string // OR semantics: issue must have AT LEAST ONE of these labels
-	LabelPattern string   // Glob pattern for label matching (e.g., "tech-*")
-	LabelRegex   string   // Regex pattern for label matching (e.g., "tech-(debt|legacy)")
-	Limit        int
-	SortPolicy   SortPolicy
+	Labels        []string // AND semantics: issue must have ALL these labels
+	LabelsAny     []string // OR semantics: issue must have AT LEAST ONE of these labels
+	ExcludeLabels []string // Exclusion: issue must NOT have ANY of these labels
+	LabelPattern  string   // Glob pattern for label matching (e.g., "tech-*")
+	LabelRegex    string   // Regex pattern for label matching (e.g., "tech-(debt|legacy)")
+	Limit         int
+	SortPolicy    SortPolicy
 
 	// Parent filtering: filter to descendants of a bead/epic (recursive)
 	ParentID *string // Show all descendants of this issue

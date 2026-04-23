@@ -90,6 +90,14 @@ func GetReadyWorkInTx(
 			args = append(args, label)
 		}
 	}
+	if len(filter.ExcludeLabels) > 0 {
+		placeholders := make([]string, len(filter.ExcludeLabels))
+		for i, label := range filter.ExcludeLabels {
+			placeholders[i] = "?"
+			args = append(args, label)
+		}
+		whereClauses = append(whereClauses, fmt.Sprintf("id NOT IN (SELECT issue_id FROM labels WHERE label IN (%s))", strings.Join(placeholders, ", ")))
+	}
 	// Parent filtering.
 	if filter.ParentID != nil {
 		parentID := *filter.ParentID

@@ -320,6 +320,7 @@ var listCmd = &cobra.Command{
 		}
 		labels, _ := cmd.Flags().GetStringSlice("label")
 		labelsAny, _ := cmd.Flags().GetStringSlice("label-any")
+		excludeLabels, _ := cmd.Flags().GetStringSlice("exclude-label")
 		labelPattern, _ := cmd.Flags().GetString("label-pattern")
 		labelRegex, _ := cmd.Flags().GetString("label-regex")
 		titleSearch, _ := cmd.Flags().GetString("title")
@@ -432,6 +433,7 @@ var listCmd = &cobra.Command{
 		// Normalize labels: trim, dedupe, remove empty
 		labels = utils.NormalizeLabels(labels)
 		labelsAny = utils.NormalizeLabels(labelsAny)
+		excludeLabels = utils.NormalizeLabels(excludeLabels)
 
 		// Apply directory-aware label scoping if no labels explicitly provided (GH#541)
 		if len(labels) == 0 && len(labelsAny) == 0 {
@@ -580,6 +582,9 @@ var listCmd = &cobra.Command{
 		}
 		if len(labelsAny) > 0 {
 			filter.LabelsAny = labelsAny
+		}
+		if len(excludeLabels) > 0 {
+			filter.ExcludeLabels = excludeLabels
 		}
 		if labelPattern != "" {
 			filter.LabelPattern = labelPattern
@@ -1018,6 +1023,7 @@ func init() {
 	listCmd.Flags().StringP("type", "t", "", "Filter by type (bug, feature, task, epic, chore, decision, merge-request, molecule, gate, convoy). Aliases: mr→merge-request, feat→feature, mol→molecule, dec/adr→decision")
 	listCmd.Flags().StringSliceP("label", "l", []string{}, "Filter by labels (AND: must have ALL). Can combine with --label-any")
 	listCmd.Flags().StringSlice("label-any", []string{}, "Filter by labels (OR: must have AT LEAST ONE). Can combine with --label")
+	listCmd.Flags().StringSlice("exclude-label", []string{}, "Exclude issues that have ANY of these labels")
 	listCmd.Flags().String("label-pattern", "", "Filter by label glob pattern (e.g., 'tech-*' matches tech-debt, tech-legacy)")
 	listCmd.Flags().String("label-regex", "", "Filter by label regex pattern (e.g., 'tech-(debt|legacy)')")
 	listCmd.Flags().String("title", "", "Filter by title text (case-insensitive substring match)")
