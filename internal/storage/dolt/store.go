@@ -2150,6 +2150,23 @@ func (s *DoltStore) pullWithAutoResolve(ctx context.Context, query string, args 
 
 	_, pullErr := tx.ExecContext(ctx, query, args...)
 
+	// GH#3144: When DOLT_PULL fails because upstream branch tracking is not
+	// configured in repo_state.json (common when remote was added via
+	// bd dolt remote add rather than bd bootstrap/dolt clone), fall back to
+	// DOLT_FETCH + DOLT_MERGE which does not require tracking config.
+	if pullErr != nil && isBranchTrackingError(pullErr) {
+		if _, err := tx.ExecContext(ctx, "CALL DOLT_FETCH(?, ?)", s.remote, s.branch); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("fetch from %s/%s: %w", s.remote, s.branch, err)
+		}
+		trackingRef := s.remote + "/" + s.branch
+		_, mergeErr := tx.ExecContext(ctx, "CALL DOLT_MERGE(?)", trackingRef)
+		if mergeErr != nil && strings.Contains(mergeErr.Error(), "up to date") {
+			mergeErr = nil
+		}
+		pullErr = mergeErr
+	}
+
 	// Check for merge conflicts regardless of whether DOLT_PULL errored.
 	// Some Dolt versions error on conflicts, others leave them in the working set.
 	resolved, resolveErr := s.tryAutoResolveMetadataConflicts(ctx, tx)
