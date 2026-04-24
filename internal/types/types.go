@@ -1165,21 +1165,21 @@ type Statistics struct {
 
 // IssueFilter is used to filter issue queries
 type IssueFilter struct {
-	Status       *Status
-	Statuses     []Status // Multiple status OR filter (from comma-separated --status)
-	Priority     *int
-	IssueType    *IssueType
-	Assignee     *string
+	Status        *Status
+	Statuses      []Status // Multiple status OR filter (from comma-separated --status)
+	Priority      *int
+	IssueType     *IssueType
+	Assignee      *string
 	Labels        []string // AND semantics: issue must have ALL these labels
 	LabelsAny     []string // OR semantics: issue must have AT LEAST ONE of these labels
 	ExcludeLabels []string // Exclusion: issue must NOT have ANY of these labels
 	LabelPattern  string   // Glob pattern for label matching (e.g., "tech-*")
 	LabelRegex    string   // Regex pattern for label matching (e.g., "tech-(debt|legacy)")
 	TitleSearch   string
-	IDs          []string // Filter by specific issue IDs
-	IDPrefix     string   // Filter by ID prefix (e.g., "bd-" to match "bd-abc123")
-	SpecIDPrefix string   // Filter by spec_id prefix
-	Limit        int
+	IDs           []string // Filter by specific issue IDs
+	IDPrefix      string   // Filter by ID prefix (e.g., "bd-" to match "bd-abc123")
+	SpecIDPrefix  string   // Filter by spec_id prefix
+	Limit         int
 
 	// Pattern matching
 	TitleContains       string
@@ -1281,11 +1281,11 @@ func (s SortPolicy) IsValid() bool {
 
 // WorkFilter is used to filter ready work queries
 type WorkFilter struct {
-	Status       Status
-	Type         string // Filter by issue type (task, bug, feature, epic, merge-request, etc.)
-	Priority     *int
-	Assignee     *string
-	Unassigned   bool     // Filter for issues with no assignee
+	Status        Status
+	Type          string // Filter by issue type (task, bug, feature, epic, merge-request, etc.)
+	Priority      *int
+	Assignee      *string
+	Unassigned    bool     // Filter for issues with no assignee
 	Labels        []string // AND semantics: issue must have ALL these labels
 	LabelsAny     []string // OR semantics: issue must have AT LEAST ONE of these labels
 	ExcludeLabels []string // Exclusion: issue must NOT have ANY of these labels
