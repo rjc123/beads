@@ -105,8 +105,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the full backlog costs about 1.7x more time (27.5s to 47.5s here); the
   all-pairs comparison itself is unchanged. Pass `--weighting raw` for the
   previous unweighted scoring — scores are not comparable between the two.
-  Pair output is also now stably sorted, so equally-scoring pairs keep a
-  deterministic order between runs (#6075).
+  Pair output is also now stably sorted: `sort.Slice` guarantees no stability
+  and thousands of pairs can tie at this size, so equally-scoring pairs now
+  keep the order they were generated in rather than an unspecified one
+  (#6075).
 
 - **PRs based on `hotfix/**` branches now run full CI, not just
   cross-version historical smokes and triage labeling.** `pr.yml`,

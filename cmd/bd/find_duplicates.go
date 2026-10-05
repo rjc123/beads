@@ -201,9 +201,10 @@ func reportFindDuplicates(ctx context.Context, issues []*types.Issue, method, we
 		pairs = findAIDuplicates(ctx, issues, threshold, weighting, model)
 	}
 
-	// Sort by similarity (highest first). Stable, so that pairs scoring
-	// equally stay in the deterministic (issue A, issue B) order they were
-	// generated in rather than permuting between runs.
+	// Sort by similarity (highest first). Stable, because sort.Slice makes no
+	// stability guarantee and thousands of pairs can tie on a large backlog:
+	// equal scores now keep the (issue A, issue B) order they were generated
+	// in, instead of an order that is simply unspecified.
 	sort.SliceStable(pairs, func(i, j int) bool {
 		return pairs[i].Similarity > pairs[j].Similarity
 	})
