@@ -85,6 +85,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the `.githooks` markers and `uv.lock` and leaves any other drifted file as it was.
 
 ### Fixed
+- **`bd find-duplicates --method mechanical` now weights tokens by inverse
+  document frequency, so it ranks real duplicates above pairs that merely
+  share an imperative verb and a description template.** The unweighted
+  Jaccard/cosine blend was dominated by common-token overlap, which collapses
+  on issue text, where nearly every title opens with Add / Fix / Build /
+  Update and nearly every description repeats a template. The failure was one
+  of ranking rather than of scale or threshold, so no cutoff could repair it:
+  measured over 3,624,778 pairs from a 2,693-issue backlog, a known true
+  duplicate pair scored 0.4926 at rank 26,778 — below the 0.50 default
+  threshold — while two unrelated errands sharing only the verb "purchase" and
+  an identical one-line description scored 0.5355 at rank 12,373, above it.
+  Raising the threshold removed the true pair before the noise. Under IDF
+  weighting, with title tokens counting for more than description tokens, the
+  same true pair scores 0.5925 at rank 1,454 and the unrelated errands 0.0529
+  at rank 222,294; the other three pairs in that true duplicate cluster
+  improve from ranks 518,730 / 522,678 / 799,295 to 8,725 / 8,729 / 7,310, and
+  the count clearing the default threshold falls from 23,421 to 5,368. Scoring
+  the full backlog costs about 1.7x more time (27.5s to 47.5s here); the
+  all-pairs comparison itself is unchanged. Pass `--weighting raw` for the
+  previous unweighted scoring — scores are not comparable between the two.
+  Pair output is also now stably sorted, so equally-scoring pairs keep a
+  deterministic order between runs (#6075).
+
 - **PRs based on `hotfix/**` branches now run full CI, not just
   cross-version historical smokes and triage labeling.** `pr.yml`,
   `pr-risk.yml`, `conformance.yml`, `cross-version-smoke.yml` and
