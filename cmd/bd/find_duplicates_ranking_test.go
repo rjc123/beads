@@ -38,8 +38,10 @@ func rankingCorpus() (issues []*types.Issue, trueA, trueB, falseA, falseB string
 		})
 	}
 
-	// The two chores the unweighted metric scores highest: no shared subject at
-	// all, only the shared verb and the shared description template.
+	// A representative pair of chores, standing in for the false-positive class
+	// as a whole: no shared subject at all, only the shared verb and the shared
+	// description template. Every chore pair in this corpus has that shape, so
+	// which two are picked does not matter.
 	falseA, falseB = "chore-001", "chore-003"
 
 	issues = append(issues,
@@ -126,7 +128,6 @@ func TestFindMechanicalDuplicatesRanksRareTokenOverlapFirst(t *testing.T) {
 		t.Errorf("IDF weighting still scores two unrelated chores %.4f, want below the default threshold %.2f",
 			idfFalseScore, defaultThreshold)
 	}
-	_ = idfFalseRank
 }
 
 // TestWeightedSimilarityReducesToUnweighted pins the compatibility property the
@@ -136,13 +137,18 @@ func TestWeightedSimilarityReducesToUnweighted(t *testing.T) {
 	a := map[string]int{"fix": 2, "auth": 1, "bug": 1}
 	b := map[string]int{"fix": 1, "auth": 3, "login": 1}
 
-	unit := tokenWeights{"fix": 1, "auth": 1, "bug": 1, "login": 1}
-
-	if got, want := weightedJaccardSimilarity(a, b, unit), jaccardSimilarity(a, b); got != want {
-		t.Errorf("weighted Jaccard with unit weights = %v, want %v", got, want)
-	}
-	if got, want := weightedCosineSimilarity(a, b, unit), cosineSimilarity(a, b); got != want {
-		t.Errorf("weighted cosine with unit weights = %v, want %v", got, want)
+	// nil is what the raw path passes; the explicit map is the same claim stated
+	// a second way, so a change to the nil shortcut alone cannot pass unnoticed.
+	for name, weights := range map[string]tokenWeights{
+		"nil":  nil,
+		"unit": {"fix": 1, "auth": 1, "bug": 1, "login": 1},
+	} {
+		if got, want := weightedJaccardSimilarity(a, b, weights), jaccardSimilarity(a, b); got != want {
+			t.Errorf("weighted Jaccard with %s weights = %v, want %v", name, got, want)
+		}
+		if got, want := weightedCosineSimilarity(a, b, weights), cosineSimilarity(a, b); got != want {
+			t.Errorf("weighted cosine with %s weights = %v, want %v", name, got, want)
+		}
 	}
 }
 
