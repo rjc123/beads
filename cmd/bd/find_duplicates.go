@@ -84,7 +84,7 @@ func init() {
 	findDuplicatesCmd.Flags().Bool("group", true, "Report clusters of mutually similar issues rather than every pair (--group=false for the flat pair list)")
 	findDuplicatesCmd.Flags().Float64("threshold", 0.5, "Similarity threshold (0.0-1.0, lower = more results)")
 	findDuplicatesCmd.Flags().StringP("status", "s", "", "Filter by status (default: non-closed)")
-	findDuplicatesCmd.Flags().IntP("limit", "n", 50, "Maximum number of pairs to show")
+	findDuplicatesCmd.Flags().IntP("limit", "n", 50, "Maximum number of findings to show (groups, or pairs under --group=false)")
 	findDuplicatesCmd.Flags().String("model", "", "AI model to use (only with --method ai; default from config ai.model)")
 	// Defensive row cap (be-x42v): exits 2 on overage, default disabled.
 	addMaxRowsFlag(findDuplicatesCmd)
