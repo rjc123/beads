@@ -85,30 +85,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the `.githooks` markers and `uv.lock` and leaves any other drifted file as it was.
 
 ### Fixed
-- **`bd find-duplicates --method mechanical` now weights tokens by inverse
-  document frequency, so it ranks real duplicates above pairs that merely
-  share an imperative verb and a description template.** The unweighted
-  Jaccard/cosine blend was dominated by common-token overlap, which collapses
-  on issue text, where nearly every title opens with Add / Fix / Build /
-  Update and nearly every description repeats a template. The failure was one
-  of ranking rather than of scale or threshold, so no cutoff could repair it:
-  measured over 3,624,778 pairs from a 2,693-issue backlog, a known true
-  duplicate pair scored 0.4926 at rank 26,778 — below the 0.50 default
-  threshold — while two unrelated errands sharing only the verb "purchase" and
-  an identical one-line description scored 0.5355 at rank 12,373, above it.
-  Raising the threshold removed the true pair before the noise. Under IDF
-  weighting, with title tokens counting for more than description tokens, the
-  same true pair scores 0.5925 at rank 1,454 and the unrelated errands 0.0529
-  at rank 222,294; the other three pairs in that true duplicate cluster
-  improve from ranks 518,730 / 522,678 / 799,295 to 8,725 / 8,729 / 7,310, and
-  the count clearing the default threshold falls from 23,421 to 5,368. Scoring
-  the full backlog costs about 1.7x more time (27.5s to 47.5s here); the
-  all-pairs comparison itself is unchanged. Pass `--weighting raw` for the
-  previous unweighted scoring — scores are not comparable between the two.
-  Pair output is also now stably sorted: `sort.Slice` guarantees no stability
-  and thousands of pairs can tie at this size, so equally-scoring pairs now
-  keep the order they were generated in rather than an unspecified one
-  (#6075).
+- **`bd find-duplicates` now surfaces real duplicates in its default output
+  instead of burying them under thousands of template matches.** Three changes
+  together, because any one of them alone leaves the command unusable on a
+  backlog of real size. Measured throughout on a 2,693-issue backlog
+  (3,624,778 pairs) against a known true duplicate pair.
+  - **Tokens are weighted by inverse document frequency** (`log(N/df)`), so the
+    words every issue carries weigh nothing and a score is driven by the rare
+    words two issues share. Before, two unrelated errands sharing only an
+    imperative verb and a description template scored 0.5355 — above the 0.50
+    default — while the true pair scored 0.4926, below it, at rank 26,778.
+  - **Title and description are scored as separate fields, title dominant.**
+    IDF alone is not enough, and this is the part that matters most. IDF
+    suppresses boilerplate shared by *every* issue, but a template used by a
+    *subset* is globally rare and therefore scores as strong evidence: a family
+    of 94 issues whose titles have nothing in common ("Build the working
+    prototype" against "Choose the tool stack") but which share a generated
+    description skeleton occupied the top of the ranking. Descriptions are also
+    around ten times longer than titles (median 811 characters against 76), so
+    weighting title *tokens* cannot fix it — the fields must be scored
+    independently. Measured on the pair that defeated IDF alone: title Jaccard
+    0.11 against description Jaccard 0.96, versus 0.54 and 0.26 for the true
+    duplicate. The description was actively inverting the ranking.
+  - **Output is grouped.** A set of mutually similar issues is now reported once
+    rather than as every pair inside it, and `--limit` counts findings rather
+    than pairs. Previously one family of 94 issues produced 4,371 pairs, and the
+    1,453 pairs outranking the true duplicate came from just 236 issues in 42
+    families. Linkage is complete, not single: an issue joins a group only if it
+    is above threshold against every member. Single linkage chains, and on this
+    corpus collapsed 898 of 2,693 issues into one group through paths of
+    pairwise similarity — it flattered the ranking for the wrong reason. Under
+    complete linkage the largest group is 21.
+
+  Net effect on the default invocation (`--threshold 0.5 --limit 50`): the true
+  duplicate pair went from **absent** — 23,421 pairs reported, the pair not
+  among them — to **present at position 37 of 94 groups**. Its position is
+  stable at 36-40 across every field weight and threshold tried, which is what
+  makes it dependable rather than lucky. What still outranks it is genuine:
+  groups of near-identical titles, not template noise.
+
+  `--weighting raw` restores the previous unweighted scoring and `--group=false`
+  the flat pair list; together they reproduce the old behaviour. Scores are not
+  comparable between weightings. JSON output gains `clusters` and `grouped` when
+  grouping, and keeps `pairs` under `--group=false` (#6075).
 
 - **PRs based on `hotfix/**` branches now run full CI, not just
   cross-version historical smokes and triage labeling.** `pr.yml`,

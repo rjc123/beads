@@ -44,12 +44,21 @@ token by its inverse document frequency across the corpus, then blends
 Jaccard and cosine similarity. IDF weighting is what makes the ranking usable
 on a large backlog: the words almost every issue carries (add, fix, update,
 and whatever description template the tracker uses) weigh nearly nothing, so
-a score is driven by the rare words two issues share. Title tokens count for
-more than description tokens. It's fast and free but may miss semantically
-similar issues with very different wording.
+a score is driven by the rare words two issues share. It's fast and free but
+may miss semantically similar issues with very different wording.
+
+Title and description are scored as separate fields, with the title dominant,
+because a description is typically an order of magnitude longer and is where a
+tracker's templates live — blended into one bag of words, a shared template
+outvotes an unrelated title.
+
+Output is grouped: a set of mutually similar issues is reported once rather
+than as every pair within it, so one templated family of N issues takes a
+single line instead of N(N-1)/2 of them.
 
 --weighting raw restores the unweighted scoring used before IDF, in which a
-pair's score was dominated by common-token overlap.
+pair's score was dominated by common-token overlap. --group=false restores the
+flat pair list.
 
 The AI approach sends candidate pairs to an Anthropic-compatible model for semantic comparison.
 It first uses mechanical pre-filtering to reduce the number of API calls,
@@ -62,7 +71,8 @@ Examples:
   bd find-duplicates --status open         # Only check open issues
   bd find-duplicates --limit 20            # Show top 20 pairs
   bd find-duplicates --json                # JSON output
-  bd find-duplicates --weighting raw       # Unweighted (pre-IDF) scoring`,
+  bd find-duplicates --weighting raw       # Unweighted (pre-IDF) scoring
+  bd find-duplicates --group=false         # Every pair, ungrouped`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE:          runFindDuplicates,
@@ -71,6 +81,7 @@ Examples:
 func init() {
 	findDuplicatesCmd.Flags().String("method", "mechanical", "Detection method: mechanical, ai")
 	findDuplicatesCmd.Flags().String("weighting", weightingIDF, "Token weighting for mechanical similarity: idf, raw")
+	findDuplicatesCmd.Flags().Bool("group", true, "Report clusters of mutually similar issues rather than every pair (--group=false for the flat pair list)")
 	findDuplicatesCmd.Flags().Float64("threshold", 0.5, "Similarity threshold (0.0-1.0, lower = more results)")
 	findDuplicatesCmd.Flags().StringP("status", "s", "", "Filter by status (default: non-closed)")
 	findDuplicatesCmd.Flags().IntP("limit", "n", 50, "Maximum number of pairs to show")
@@ -107,6 +118,7 @@ func runFindDuplicates(cmd *cobra.Command, _ []string) error {
 
 	method, _ := cmd.Flags().GetString("method")
 	weighting, _ := cmd.Flags().GetString("weighting")
+	group, _ := cmd.Flags().GetBool("group")
 	threshold, _ := cmd.Flags().GetFloat64("threshold")
 	status, _ := cmd.Flags().GetString("status")
 	limit, _ := cmd.Flags().GetInt("limit")
@@ -152,7 +164,7 @@ func runFindDuplicates(cmd *cobra.Command, _ []string) error {
 		if err := rejectResolvedMaxRowsUnderProxiedServer(maxRows); err != nil {
 			return err
 		}
-		return runFindDuplicatesProxiedServer(rootCtx, filter, status, method, weighting, threshold, limit, model)
+		return runFindDuplicatesProxiedServer(rootCtx, filter, status, method, weighting, threshold, limit, model, group)
 	}
 
 	issues, err := store.SearchIssues(rootCtx, "", filter)
@@ -164,7 +176,7 @@ func runFindDuplicates(cmd *cobra.Command, _ []string) error {
 	}
 	issues = filterClosedIfNoStatus(issues, status)
 
-	return reportFindDuplicates(rootCtx, issues, method, weighting, threshold, limit, model)
+	return reportFindDuplicates(rootCtx, issues, method, weighting, threshold, limit, model, group)
 }
 
 func filterClosedIfNoStatus(issues []*types.Issue, status string) []*types.Issue {
@@ -180,7 +192,7 @@ func filterClosedIfNoStatus(issues []*types.Issue, status string) []*types.Issue
 	return filtered
 }
 
-func reportFindDuplicates(ctx context.Context, issues []*types.Issue, method, weighting string, threshold float64, limit int, model string) error {
+func reportFindDuplicates(ctx context.Context, issues []*types.Issue, method, weighting string, threshold float64, limit int, model string, group bool) error {
 	if len(issues) < 2 {
 		if jsonOutput {
 			return outputJSON(map[string]interface{}{
@@ -209,8 +221,16 @@ func reportFindDuplicates(ctx context.Context, issues []*types.Issue, method, we
 		return pairs[i].Similarity > pairs[j].Similarity
 	})
 
-	// Apply limit
-	if limit > 0 && len(pairs) > limit {
+	// Collapse to clusters before applying the limit, so that --limit counts
+	// findings rather than pairs. Without this one templated family of N issues
+	// consumes N(N-1)/2 of the caller's budget on a single finding.
+	var clusters []duplicateCluster
+	if group {
+		clusters = clusterDuplicates(pairs)
+		if limit > 0 && len(clusters) > limit {
+			clusters = clusters[:limit]
+		}
+	} else if limit > 0 && len(pairs) > limit {
 		pairs = pairs[:limit]
 	}
 
@@ -237,17 +257,67 @@ func reportFindDuplicates(ctx context.Context, issues []*types.Issue, method, we
 				Reason:      p.Reason,
 			}
 		}
+		if group {
+			type clusterJSON struct {
+				IssueIDs   []string `json:"issue_ids"`
+				Titles     []string `json:"titles"`
+				Size       int      `json:"size"`
+				Similarity float64  `json:"similarity"`
+				BestPair   []string `json:"best_pair"`
+			}
+			jsonClusters := make([]clusterJSON, len(clusters))
+			for i, c := range clusters {
+				cj := clusterJSON{
+					Size:       len(c.Issues),
+					Similarity: c.Best.Similarity,
+					BestPair:   []string{c.Best.IssueA.ID, c.Best.IssueB.ID},
+				}
+				for _, issue := range c.Issues {
+					cj.IssueIDs = append(cj.IssueIDs, issue.ID)
+					cj.Titles = append(cj.Titles, issue.Title)
+				}
+				jsonClusters[i] = cj
+			}
+			return outputJSON(map[string]interface{}{
+				"clusters":  jsonClusters,
+				"count":     len(jsonClusters),
+				"method":    method,
+				"weighting": weighting,
+				"threshold": threshold,
+				"grouped":   true,
+			})
+		}
 		return outputJSON(map[string]interface{}{
 			"pairs":     jsonPairs,
 			"count":     len(jsonPairs),
 			"method":    method,
 			"weighting": weighting,
 			"threshold": threshold,
+			"grouped":   false,
 		})
 	}
 
 	if len(pairs) == 0 {
 		fmt.Printf("No similar issues found (threshold: %.0f%%)\n", threshold*100)
+		return nil
+	}
+
+	if group {
+		fmt.Printf("%s Found %d group(s) of similar issues (threshold: %.0f%%):\n\n",
+			ui.RenderWarn("🔍"), len(clusters), threshold*100)
+		for i, c := range clusters {
+			pct := c.Best.Similarity * 100
+			fmt.Printf("%s Group %d (%.0f%% similar, %d issues):\n",
+				ui.RenderAccent("━━"), i+1, pct, len(c.Issues))
+			for _, issue := range c.Issues {
+				fmt.Printf("  %s %s\n", ui.RenderPass(issue.ID), issue.Title)
+			}
+			if c.Best.Reason != "" {
+				fmt.Printf("  %s %s\n", ui.RenderAccent("Reason:"), c.Best.Reason)
+			}
+			fmt.Printf("  %s bd show %s %s\n\n",
+				ui.RenderAccent("Compare:"), c.Best.IssueA.ID, c.Best.IssueB.ID)
+		}
 		return nil
 	}
 
@@ -414,72 +484,176 @@ func pairSimilarity(a, b map[string]int, weights tokenWeights) float64 {
 	return (weightedJaccardSimilarity(a, b, weights) + weightedCosineSimilarity(a, b, weights)) / 2
 }
 
-// titleTokenWeight is how many times a title token counts relative to a
-// description token. An issue's title is the closest thing it has to an
-// identity, while a description often carries a template every issue in the
-// tracker shares. Measured on a 2,693-issue backlog, lifting the title from
-// 1 to 3 moved a known true duplicate pair from rank 5,461 to rank 1,454 and
-// pushed a known false pair from rank 20,232 to rank 222,294.
-const titleTokenWeight = 3
+// Field weights for the mechanical method. An issue's title is the closest
+// thing it has to an identity; its description is where a tracker's templates
+// live, and it is typically an order of magnitude longer (median 811 characters
+// against 76 for titles on the backlog this was measured against). Reading the
+// two as one bag of words therefore lets a shared description template outvote
+// an unrelated title: a family of 94 issues whose titles have nothing in common
+// but whose descriptions share a generated skeleton occupied the top of the
+// ranking, because that skeleton is rare corpus-wide and so scores as strong
+// evidence. Scoring the fields separately removes the length dependence.
+const titleFieldWeight = 0.8
 
-// issueTokens tokenizes an issue for comparison, counting each title token
-// titleTokenWeight times.
-func issueTokens(issue *types.Issue) map[string]int {
-	tokens := make(map[string]int)
-	for token, count := range tokenize(issue.Title) {
-		tokens[token] = count * titleTokenWeight
+// issueFields holds one issue's tokens per field. The fields carry separate
+// inverse document frequencies because a token's discriminating power differs
+// between them: "spike" may be common in titles and rare in descriptions.
+type issueFields struct {
+	title map[string]int
+	desc  map[string]int
+}
+
+// fieldSimilarity blends the per-field scores with the title dominant.
+func fieldSimilarity(a, b issueFields, titleIDF, descIDF tokenWeights) float64 {
+	titleSim := pairSimilarity(a.title, b.title, titleIDF)
+	if len(a.desc) == 0 || len(b.desc) == 0 {
+		// One side has no description, so there is no second field to compare.
+		// Fall back to the title alone rather than scaling a good title match
+		// down by a zero that records only a missing field.
+		return titleSim
 	}
-	for token, count := range tokenize(issue.Description) {
-		tokens[token] += count
-	}
-	return tokens
+	return titleFieldWeight*titleSim + (1-titleFieldWeight)*pairSimilarity(a.desc, b.desc, descIDF)
 }
 
 // findMechanicalDuplicates finds similar issues using token-based text
-// similarity weighted by inverse document frequency.
+// similarity, weighting each token by its inverse document frequency and
+// scoring title and description as separate fields.
 func findMechanicalDuplicates(issues []*types.Issue, threshold float64) []duplicatePair {
 	return findMechanicalDuplicatesWeighted(issues, threshold, weightingIDF)
 }
 
-// findMechanicalDuplicatesWeighted scores every issue pair under the named
-// token weighting. weightingRaw reproduces the pre-IDF behaviour exactly:
-// unit token weights over title and description read as one flat document.
+// findMechanicalDuplicatesWeighted scores every issue pair under the named token
+// weighting. weightingRaw reproduces the pre-IDF behaviour exactly: unit token
+// weights over title and description read as one flat document.
 func findMechanicalDuplicatesWeighted(issues []*types.Issue, threshold float64, weighting string) []duplicatePair {
-	unweighted := weighting == weightingRaw
-
-	// Pre-tokenize all issues
-	docs := make([]map[string]int, len(issues))
-	for i, issue := range issues {
-		if unweighted {
-			docs[i] = tokenize(issueText(issue))
-		} else {
-			docs[i] = issueTokens(issue)
-		}
-	}
-
-	var weights tokenWeights
-	if !unweighted {
-		weights = inverseDocumentFrequencies(docs)
-	}
-
-	var pairs []duplicatePair
-
-	// Compare all pairs
-	for i := 0; i < len(docs); i++ {
-		for j := i + 1; j < len(docs); j++ {
-			similarity := pairSimilarity(docs[i], docs[j], weights)
-			if similarity >= threshold {
-				pairs = append(pairs, duplicatePair{
-					IssueA:     issues[i],
-					IssueB:     issues[j],
-					Similarity: similarity,
-					Method:     "mechanical",
-				})
+	emit := func(scoreOf func(i, j int) float64) []duplicatePair {
+		var pairs []duplicatePair
+		for i := range issues {
+			for j := i + 1; j < len(issues); j++ {
+				if s := scoreOf(i, j); s >= threshold {
+					pairs = append(pairs, duplicatePair{
+						IssueA:     issues[i],
+						IssueB:     issues[j],
+						Similarity: s,
+						Method:     "mechanical",
+					})
+				}
 			}
 		}
+		return pairs
 	}
 
-	return pairs
+	if weighting == weightingRaw {
+		docs := make([]map[string]int, len(issues))
+		for i, issue := range issues {
+			docs[i] = tokenize(issueText(issue))
+		}
+		return emit(func(i, j int) float64 { return pairSimilarity(docs[i], docs[j], nil) })
+	}
+
+	fields := make([]issueFields, len(issues))
+	titles := make([]map[string]int, len(issues))
+	descs := make([]map[string]int, len(issues))
+	for i, issue := range issues {
+		fields[i] = issueFields{title: tokenize(issue.Title), desc: tokenize(issue.Description)}
+		titles[i], descs[i] = fields[i].title, fields[i].desc
+	}
+	titleIDF := inverseDocumentFrequencies(titles)
+	descIDF := inverseDocumentFrequencies(descs)
+	return emit(func(i, j int) float64 {
+		return fieldSimilarity(fields[i], fields[j], titleIDF, descIDF)
+	})
+}
+
+// duplicateCluster is a set of mutually similar issues reported as one finding.
+type duplicateCluster struct {
+	Issues []*types.Issue `json:"issues"`
+	// Best is the highest-scoring pair in the cluster, and what it is ranked by.
+	Best duplicatePair `json:"best_pair"`
+}
+
+// clusterDuplicates collapses scored pairs into clusters of mutually similar
+// issues, highest-scoring cluster first. Reporting pairs instead lets one
+// templated family of N issues fill the output with N(N-1)/2 entries: on the
+// measured backlog a single family of 94 accounted for 4,371 pairs, and the
+// 1,453 pairs that outranked a known true duplicate came from just 236 issues
+// in 42 families.
+//
+// Linkage is COMPLETE, not single: an issue joins a cluster only when it scores
+// above threshold against EVERY member already in it. This matters more than it
+// sounds. Single linkage — merging any two issues joined by a path of pairwise
+// similarities — collapsed 898 of 2,693 issues into one cluster on that corpus,
+// because unrelated issues chain through intermediates; it flattered the
+// ranking for entirely the wrong reason. Under complete linkage the largest
+// cluster on the same corpus is 21.
+//
+// pairs must already be sorted by descending similarity. Clusters are grown
+// from the pairs that passed --threshold, so there is no second similarity
+// parameter to tune.
+func clusterDuplicates(pairs []duplicatePair) []duplicateCluster {
+	// Adjacency over the reported pairs only, plus an id index so a candidate's
+	// issue can be recovered in constant time rather than by rescanning pairs.
+	adj := make(map[string]map[string]bool, len(pairs))
+	byID := make(map[string]*types.Issue, len(pairs))
+	link := func(a, b string) {
+		if adj[a] == nil {
+			adj[a] = make(map[string]bool)
+		}
+		adj[a][b] = true
+	}
+	for _, p := range pairs {
+		link(p.IssueA.ID, p.IssueB.ID)
+		link(p.IssueB.ID, p.IssueA.ID)
+		byID[p.IssueA.ID] = p.IssueA
+		byID[p.IssueB.ID] = p.IssueB
+	}
+
+	claimed := make(map[string]bool, len(adj))
+	var clusters []duplicateCluster
+	for _, p := range pairs {
+		a, b := p.IssueA.ID, p.IssueB.ID
+		if claimed[a] || claimed[b] {
+			continue
+		}
+		claimed[a], claimed[b] = true, true
+		members := []*types.Issue{p.IssueA, p.IssueB}
+		memberIDs := []string{a, b}
+
+		// Grow by complete linkage: a candidate must be adjacent to every
+		// member. Candidates can only come from the first member's neighbours,
+		// since one not adjacent to it cannot be adjacent to all. Iterate them
+		// in sorted order: ranging a map here would make cluster membership
+		// depend on Go's randomised map order and the output irreproducible.
+		candidates := make([]string, 0, len(adj[a]))
+		for cand := range adj[a] {
+			candidates = append(candidates, cand)
+		}
+		sort.Strings(candidates)
+		for _, cand := range candidates {
+			if claimed[cand] {
+				continue
+			}
+			adjacentToAll := true
+			for _, id := range memberIDs {
+				if !adj[cand][id] {
+					adjacentToAll = false
+					break
+				}
+			}
+			if !adjacentToAll {
+				continue
+			}
+			issue := byID[cand]
+			if issue == nil {
+				continue
+			}
+			claimed[cand] = true
+			members = append(members, issue)
+			memberIDs = append(memberIDs, cand)
+		}
+		clusters = append(clusters, duplicateCluster{Issues: members, Best: p})
+	}
+	return clusters
 }
 
 // findAIDuplicates uses LLM-based semantic comparison to find duplicates.
